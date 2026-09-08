@@ -7,6 +7,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { alignArena } from './projection';
+import { enemyVisual, animateEnemy, bombVisual } from './encounter-visuals';
 import { Game, POWER, type Snapshot, type FX } from './model';
 
 type Particle = {
@@ -499,6 +500,9 @@ export class Arena {
       }
       o.scale.y = br.hp < br.max ? 0.7 : 1;
     }
+    const piercing = !!this.game.powers.pierce;
+    this.ballMaterial.emissive.setHex(piercing ? 0xff792c : 0x30636f);
+    this.ballMaterial.emissiveIntensity = piercing ? 0.7 : 0.3;
     for (const b of this.game.balls) {
       alive.add(b.id);
       let o = this.meshes.get(b.id);
@@ -530,6 +534,9 @@ export class Arena {
           this.world.add(line);
           this.trailMeshes.set(b.id, line);
         }
+        (line.material as T.LineBasicMaterial).color.setHex(
+          piercing ? 0xffae5c : 0x50dfff,
+        );
         line.geometry.dispose();
         line.geometry = new T.BufferGeometry().setFromPoints(points);
       }
@@ -538,30 +545,22 @@ export class Arena {
       alive.add(d.id);
       let o = this.meshes.get(d.id);
       if (!o) {
-        o = new T.Group();
-        if (this.droneTemplate) {
-          const model = this.droneTemplate.clone();
-          model.scale.setScalar(1.6);
-          o.add(model);
-        } else {
-          const body = new T.Mesh(new T.OctahedronGeometry(0.55), this.chrome);
-          o.add(body);
-        }
-        const ring = new T.Mesh(
-          new T.TorusGeometry(0.66, 0.023, 6, 40),
-          new T.MeshBasicMaterial({ color: 0xf864a1 }),
-        );
-        ring.rotation.x = -Math.PI / 2;
-        o.add(ring);
+        o = enemyVisual(d.kind, this.droneTemplate, this.chrome);
         this.world.add(o);
         this.meshes.set(d.id, o);
       }
-      o.position.set(d.x, 1 + Math.sin(this.clock * 3 + d.phase) * 0.12, d.z);
-      o.rotation.y = Math.sin(this.clock + d.phase) * 0.2;
-      const ring = o.children[o.children.length - 1];
-      ring.scale.setScalar(
-        d.ball !== null || d.cargo ? 1.3 + Math.sin(this.clock * 8) * 0.12 : 1,
-      );
+      animateEnemy(o, d, !!this.game.powers.freeze, this.reduced);
+    }
+    for (const bomb of this.game.bombs) {
+      alive.add(bomb.id);
+      let o = this.meshes.get(bomb.id);
+      if (!o) {
+        o = bombVisual();
+        this.world.add(o);
+        this.meshes.set(bomb.id, o);
+      }
+      o.position.set(bomb.x, 0.4, bomb.z);
+      if (!this.reduced) o.rotation.y = this.game.enemyTime * 3;
     }
     for (const drop of this.game.drops) {
       alive.add(drop.id);
@@ -641,7 +640,25 @@ export class Arena {
     this.shield.scale.y = 1 + Math.sin(this.clock * 5) * 0.2;
     this.boss.visible = this.game.boss > 0;
     this.boss.position.set(this.game.bossX, 0.9, -9);
-    this.boss.rotation.y = this.clock * 0.3;
+    this.boss.rotation.y = this.game.enemyTime * 0.3;
+    for (const ring of this.boss.children.slice(1)) {
+      ring.scale.setScalar(
+        this.game.bossFireIn <= 1 && !this.reduced
+          ? 1 + Math.sin(this.game.enemyTime * 12) * 0.12
+          : 1,
+      );
+    }
+    const bossCore = this.boss.children[0] as T.Mesh<
+      T.IcosahedronGeometry,
+      T.MeshPhysicalMaterial
+    >;
+    bossCore.material.color.setHex(
+      this.game.level < 4
+        ? 0xb4a4ed
+        : this.game.level < 8
+          ? 0xf4c97f
+          : 0xa8e0e8,
+    );
   }
   private effect(e: FX) {
     const count = this.reduced
@@ -766,7 +783,7 @@ export class Arena {
   };
   private freeEntity(root: T.Object3D) {
     root.traverse((o) => {
-      if (o instanceof T.Mesh) {
+      if (o instanceof T.Mesh || o instanceof T.Line) {
         if (!this.sharedGeo.has(o.geometry)) o.geometry.dispose();
         for (const m of Array.isArray(o.material) ? o.material : [o.material])
           if (!this.sharedMat.has(m)) {

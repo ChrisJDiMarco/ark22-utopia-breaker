@@ -1,3 +1,6 @@
+import { CAMPAIGN, ENEMIES, type EnemyKind, type Supply } from './campaign';
+import { stepEnemies } from './encounters';
+export { SECTORS } from './campaign';
 export type Mode =
   | 'menu'
   | 'ready'
@@ -13,7 +16,10 @@ export type Power =
   | 'slow'
   | 'catch'
   | 'shield'
-  | 'life';
+  | 'life'
+  | 'pierce'
+  | 'freeze'
+  | 'magnet';
 export const POWER: Record<
   Power,
   { label: string; glyph: string; color: number; duration: number }
@@ -25,15 +31,15 @@ export const POWER: Record<
   catch: { label: 'Magnet catch', glyph: 'C', color: 0xe6bd68, duration: 16 },
   shield: { label: 'Floor shield', glyph: 'H', color: 0x74dff3, duration: 0 },
   life: { label: 'Extra hull', glyph: '+', color: 0xffb6da, duration: 0 },
+  pierce: { label: 'Prism pierce', glyph: 'P', color: 0xffa85b, duration: 12 },
+  freeze: { label: 'Cryo field', glyph: 'F', color: 0x9feaff, duration: 8 },
+  magnet: {
+    label: 'Capsule magnet',
+    glyph: 'A',
+    color: 0xd6a4ff,
+    duration: 18,
+  },
 };
-export const SECTORS = [
-  'The glass garden',
-  'Prism cascade',
-  'Orbital bloom',
-  'Solar lattice',
-  'Crystal current',
-  'The light keeper',
-];
 export type Ball = {
   id: number;
   x: number;
@@ -43,6 +49,7 @@ export type Ball = {
   held: boolean;
   captor: number | null;
   safe: number;
+  contacts: Set<number>;
 };
 export type Brick = {
   id: number;
@@ -56,6 +63,9 @@ export type Brick = {
 export type Drop = { id: number; x: number; z: number; kind: Power };
 export type Drone = {
   id: number;
+  kind: EnemyKind;
+  fireIn: number;
+  aimX: number;
   x: number;
   z: number;
   age: number;
@@ -65,6 +75,7 @@ export type Drone = {
   escape: number;
   phase: number;
 };
+export type Bomb = { id: number; x: number; z: number; vx: number; vz: number };
 export type Shot = { id: number; x: number; z: number };
 export type FX = {
   kind:
@@ -95,6 +106,10 @@ export type Snapshot = {
   shield: number;
   captured: boolean;
   boss: number;
+  bossMax: number;
+  bossWarning: boolean;
+  jam: number;
+  supply: Supply;
 };
 export const clamp = (n: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, n));
@@ -118,6 +133,14 @@ export class Game {
   noticeUntil = 0;
   boss = 0;
   bossX = 0;
+  bossMax = 0;
+  bossFireIn = 6;
+  bossAim = 0;
+  enemyTime = 0;
+  wave = 0;
+  jam = 0;
+  supply: Supply = 'shield';
+  bombs: Bomb[] = [];
   balls: Ball[] = [];
   bricks: Brick[] = [];
   drops: Drop[] = [];
@@ -126,7 +149,7 @@ export class Game {
   powers: Partial<Record<Power, number>> = {};
   events: FX[] = [];
   private serial = 0;
-  private spawnIn = 8;
+  spawnIn = 8;
   private fireIn = 0;
   private broken = 0;
   private total = 0;
@@ -135,11 +158,11 @@ export class Game {
     this.loadLevel();
   }
   get width() {
-    return this.powers.wide ? 7 : 5.4;
+    return (this.powers.wide ? 7 : 5.4) * (this.jam > 0 ? 0.72 : 1);
   }
   get speed() {
     return (
-      (9.4 + this.level * 0.75 + Math.min(this.broken * 0.028, 2)) *
+      (9.4 + Math.min(this.level, 7) * 0.6 + Math.min(this.broken * 0.028, 2)) *
       (this.powers.slow ? 0.68 : 1)
     );
   }
@@ -150,16 +173,16 @@ export class Game {
     this.notice = text;
     this.noticeUntil = this.time + duration;
   }
-  start() {
+  start(checkpoint = 0) {
     this.score = 0;
-    this.level = 0;
+    this.level = [0, 4, 8].includes(checkpoint) ? checkpoint : 0;
     this.lives = 3;
     this.energy = 100;
     this.time = 0;
     this.sequence = 0;
     this.loadLevel();
     this.mode = 'ready';
-    this.say('Click or press Space to launch', 5);
+    this.say(CAMPAIGN[this.level].hint, 8);
   }
   loadLevel() {
     this.bricks = [];
@@ -167,6 +190,14 @@ export class Game {
     this.drops = [];
     this.drones = [];
     this.shots = [];
+    this.bombs = [];
+    this.jam = 0;
+    this.enemyTime = 0;
+    this.wave = 0;
+    this.supply = 'shield';
+    this.bossFireIn = 6;
+    this.bossAim = 0;
+    this.bossX = 0;
     this.powers = {};
     this.combo = 0;
     this.shield = 0;
@@ -175,17 +206,17 @@ export class Game {
     this.broken = 0;
     this.paddle = 0;
     this.target = 0;
-    this.boss = this.level === 5 ? 18 : 0;
+    this.bossMax = CAMPAIGN[this.level].guardian?.hp ?? 0;
+    this.boss = this.bossMax;
     for (let r = 0; r < 9; r++)
       for (let c = 0; c < 11; c++) {
-        const skip =
-          (this.level === 1 && (c + r) % 5 === 0) ||
-          (this.level === 2 && Math.abs(c - 5) > r + 2) ||
-          (this.level === 3 && (r === 2 || r === 3) && c % 3 === 0) ||
-          (this.level === 4 && (c + r) % 4 === 0) ||
-          (this.level === 5 && r < 2);
-        if (skip) continue;
-        const hp = this.level > 0 && (r + c + this.level) % 5 === 0 ? 2 : 1;
+        if (!CAMPAIGN[this.level].pattern(r, c)) continue;
+        const hp =
+          this.level === 9 && (r === 0 || r === 8 || c === 0 || c === 10)
+            ? 3
+            : this.level > 0 && (r + c + this.level) % 5 === 0
+              ? 2
+              : 1;
         this.bricks.push({
           id: this.id(),
           x: (c - 5) * 1.42,
@@ -193,7 +224,8 @@ export class Game {
           hp,
           max: hp,
           row: r % 6,
-          burst: this.level > 1 && (r * 11 + c) % 13 === 0,
+          burst:
+            this.level > 1 && (r * 11 + c) % (this.level === 6 ? 5 : 13) === 0,
         });
       }
     this.total = this.bricks.length;
@@ -210,6 +242,7 @@ export class Game {
       held,
       captor: null,
       safe: 1.5,
+      contacts: new Set(),
     });
   }
   action() {
@@ -222,10 +255,20 @@ export class Game {
       return;
     }
     if (this.mode === 'clear') {
+      const reward = this.supply;
       this.level++;
       this.loadLevel();
+      this.energy = 100;
+      if (reward === 'shield') this.shield = 2;
+      else if (reward === 'repair') {
+        if (this.lives < 5) this.lives++;
+        else this.score += 1500;
+      } else {
+        this.powers.laser = 18;
+        this.powers.wide = 20;
+      }
       this.mode = 'ready';
-      this.say('New sector. Click to launch');
+      this.say(CAMPAIGN[this.level].hint, 8);
       return;
     }
     if (this.mode === 'paused') {
@@ -244,6 +287,13 @@ export class Game {
         }
       if (this.powers.laser) this.fire();
     }
+  }
+  chooseSupply(supply: Supply) {
+    if (
+      this.mode === 'clear' &&
+      ['shield', 'repair', 'arsenal'].includes(supply)
+    )
+      this.supply = supply;
   }
   pause() {
     if (this.mode === 'paused') {
@@ -264,6 +314,8 @@ export class Game {
   pulse() {
     if (this.mode !== 'playing' || this.energy < 100) return;
     this.energy = 0;
+    this.bombs = [];
+    this.jam = 0;
     this.events.push({
       kind: 'pulse',
       x: this.paddle,
@@ -299,6 +351,20 @@ export class Game {
     else if (kind === 'life') this.lives = Math.min(5, this.lives + 1);
     else this.powers[kind] = POWER[kind].duration;
   }
+  hitDrone(d: Drone) {
+    if (!this.drones.includes(d)) return;
+    d.hp--;
+    if (d.hp <= 0) this.destroyDrone(d);
+    else {
+      this.score += 50;
+      this.events.push({
+        kind: 'hit',
+        x: d.x,
+        z: d.z,
+        color: ENEMIES[d.kind].color,
+      });
+    }
+  }
   destroyDrone(d: Drone) {
     if (!this.drones.includes(d)) return;
     if (d.ball !== null) {
@@ -315,9 +381,14 @@ export class Game {
     if (d.cargo)
       this.drops.push({ id: this.id(), x: d.x, z: d.z, kind: d.cargo });
     this.drones = this.drones.filter((o) => o.id !== d.id);
-    this.score += 250;
+    this.score += d.kind === 'sentinel' ? 400 : 250;
     this.energy = clamp(this.energy + 12, 0, 100);
-    this.events.push({ kind: 'drone', x: d.x, z: d.z, color: 0xff7fa5 });
+    this.events.push({
+      kind: 'drone',
+      x: d.x,
+      z: d.z,
+      color: ENEMIES[d.kind].color,
+    });
   }
   hitBrick(br: Brick, chain = false) {
     if (!this.bricks.includes(br)) return;
@@ -348,6 +419,9 @@ export class Game {
         'shield',
         'slow',
         'catch',
+        'pierce',
+        'freeze',
+        'magnet',
         'multi',
         'life',
       ];
@@ -379,6 +453,7 @@ export class Game {
   }
   private tick(dt: number) {
     this.time += dt;
+    this.jam = Math.max(0, this.jam - dt);
     this.energy = clamp(this.energy + dt * 1.15, 0, 100);
     this.fireIn -= dt;
     for (const key of Object.keys(this.powers) as Power[]) {
@@ -390,7 +465,7 @@ export class Game {
         this.paddle) *
       Math.min(1, dt * 22);
     if (this.powers.laser) this.fire();
-    this.bossX = Math.sin(this.time * 0.65) * 4.8;
+
     for (const b of this.balls) {
       b.safe -= dt;
       if (b.captor !== null) continue;
@@ -448,10 +523,21 @@ export class Game {
         this.balls = this.balls.filter((o) => o.id !== b.id);
         continue;
       }
+      for (const id of b.contacts) {
+        const br = this.bricks.find((br) => br.id === id);
+        if (!br || Math.abs(b.x - br.x) >= 0.86 || Math.abs(b.z - br.z) >= 0.51)
+          b.contacts.delete(id);
+      }
       for (const br of this.bricks) {
         const dx = b.x - br.x,
           dz = b.z - br.z;
         if (Math.abs(dx) < 0.86 && Math.abs(dz) < 0.51) {
+          if (b.contacts.has(br.id)) continue;
+          if (this.powers.pierce) {
+            b.contacts.add(br.id);
+            this.hitBrick(br);
+            continue;
+          }
           if (Math.abs(oldZ - br.z) >= 0.5) {
             b.vz = -b.vz;
             b.z = br.z + Math.sign(oldZ - br.z) * 0.52;
@@ -484,7 +570,7 @@ export class Game {
       let hit = false;
       for (const d of this.drones)
         if (Math.hypot(s.x - d.x, s.z - d.z) < 0.75) {
-          this.destroyDrone(d);
+          this.hitDrone(d);
           hit = true;
           break;
         }
@@ -509,6 +595,8 @@ export class Game {
     }
     for (const drop of this.drops) {
       drop.z += 2.4 * dt;
+      if (this.powers.magnet)
+        drop.x += clamp(this.paddle - drop.x, -5 * dt, 5 * dt);
       if (
         drop.z >= 8 &&
         drop.z < 9 &&
@@ -519,83 +607,13 @@ export class Game {
       } else if (drop.z > 11)
         this.drops = this.drops.filter((o) => o.id !== drop.id);
     }
-    this.spawnIn -= dt;
-    if (this.spawnIn <= 0 && this.drones.length < 2) {
-      this.spawnIn = Math.max(6, 11 - this.level);
-      this.drones.push({
-        id: this.id(),
-        x: (this.random() - 0.5) * 12,
-        z: -9.7,
-        age: 0,
-        hp: 1,
-        ball: null,
-        cargo: null,
-        escape: 0,
-        phase: this.random() * 6.28,
-      });
-      this.say('Raider inbound · E to repel', 2.5);
-    }
-    for (const d of this.drones) {
-      d.age += dt;
-      if (d.ball !== null || d.cargo) {
-        d.escape += dt;
-        d.z -= 1.65 * dt;
-        d.x += Math.sin(this.time * 3 + d.phase) * dt * 0.7;
-        if (d.ball !== null) {
-          const b = this.balls.find((b) => b.id === d.ball);
-          if (b) {
-            b.x = d.x;
-            b.z = d.z;
-          }
-        }
-        if (d.z < -11 || d.escape > 8) {
-          if (d.ball !== null) {
-            this.balls = this.balls.filter((b) => b.id !== d.ball);
-            this.say('Ball stolen · intercept the next raider');
-          } else this.say('Power-up stolen');
-          this.drones = this.drones.filter((o) => o.id !== d.id);
-        }
-        continue;
-      }
-      const drop = this.drops.reduce<Drop | undefined>(
-        (best, p) =>
-          !best ||
-          Math.hypot(p.x - d.x, p.z - d.z) <
-            Math.hypot(best.x - d.x, best.z - d.z)
-            ? p
-            : best,
-        undefined,
-      );
-      const ball = this.balls.find(
-        (b) => !b.held && b.captor === null && b.safe <= 0 && b.z > -2,
-      );
-      const tx = drop?.x ?? ball?.x ?? Math.sin(d.age * 0.8 + d.phase) * 6,
-        tz = drop?.z ?? ball?.z ?? 1 + Math.sin(d.age * 0.5) * 3;
-      const dist = Math.hypot(tx - d.x, tz - d.z) || 1;
-      d.x += ((tx - d.x) / dist) * 2.1 * dt;
-      d.z += ((tz - d.z) / dist) * 2.1 * dt;
-      if (drop && Math.hypot(drop.x - d.x, drop.z - d.z) < 0.7) {
-        d.cargo = drop.kind;
-        this.drops = this.drops.filter((o) => o.id !== drop.id);
-        this.say('Raider stole a capsule · hit it to recover');
-      }
-      for (const b of this.balls) {
-        if (b.held || b.captor !== null || b.safe > 0) continue;
-        if (Math.hypot(b.x - d.x, b.z - d.z) < 0.7) {
-          if (b.vz > 0 && !d.cargo && d.ball === null) {
-            b.captor = d.id;
-            d.ball = b.id;
-            this.say('BALL CAPTURED · press E to rescue', 5);
-          } else {
-            b.vz = -b.vz;
-            b.safe = 0.8;
-            this.destroyDrone(d);
-          }
-          break;
-        }
-      }
-      if (d.age > 25 && d.ball === null && !d.cargo)
-        this.drones = this.drones.filter((o) => o.id !== d.id);
+    stepEnemies(this, dt);
+    // A completed sector takes precedence over a simultaneous last-ball loss.
+    if (this.bricks.length === 0 && this.boss === 0) {
+      this.score += 1000 * (this.level + 1);
+      this.mode = this.level === CAMPAIGN.length - 1 ? 'victory' : 'clear';
+      this.say('Sector clear');
+      return;
     }
     if (this.balls.length === 0) {
       this.lives--;
@@ -604,6 +622,8 @@ export class Game {
       this.shots = [];
       this.drones = [];
       this.drops = [];
+      this.bombs = [];
+      this.jam = 0;
       this.events.push({ kind: 'lost', x: this.paddle, z: 9, color: 0xff648b });
       if (this.lives <= 0) {
         this.mode = 'gameover';
@@ -614,17 +634,16 @@ export class Game {
         this.say('Hull lost · click or Space to relaunch', 8);
       }
     }
-    if (this.bricks.length === 0 && this.boss === 0) {
-      this.score += 1000 * (this.level + 1);
-      this.mode = this.level === 5 ? 'victory' : 'clear';
-      this.say('Sector clear');
-    }
   }
   hitBoss() {
+    if (this.boss <= 0) return;
     this.boss--;
     this.score += 200;
     this.events.push({ kind: 'boss', x: this.bossX, z: -9, color: 0xffd78f });
-    if (this.boss === 0) this.say('Light keeper restored');
+    if (this.boss === 0) {
+      this.bombs = [];
+      this.say(`${CAMPAIGN[this.level].guardian?.name ?? 'Guardian'} restored`);
+    }
   }
   snapshot(): Snapshot {
     return {
@@ -644,6 +663,10 @@ export class Game {
       shield: this.shield,
       captured: this.balls.some((b) => b.captor !== null),
       boss: this.boss,
+      bossMax: this.bossMax,
+      bossWarning: this.boss > 0 && this.bossFireIn <= 1,
+      jam: Math.ceil(this.jam),
+      supply: this.supply,
     };
   }
 }

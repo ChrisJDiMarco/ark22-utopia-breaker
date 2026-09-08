@@ -6,13 +6,17 @@ A real-time Three.js brick-breaker in a sunlit glass atrium. Built with GPT Site
 
 Move the paddle with mouse, touch drag, arrows, or A/D. Click or Space launches. E spends a charged rescue pulse. P pauses. The game also pauses when the window loses focus.
 
-Clear six sectors, then defeat the Light Keeper. Raiders steal descending balls and falling capsules; hit a carrier with another ball or a laser, or use pulse to recover its cargo. Seven pickups provide multiball, automatic twin lasers, a wider paddle, slow time, magnet catch, floor shields, and extra hull. Best score stays on the current device.
+Restore twelve distinct sectors and defeat guardians in sectors 4, 8, and 12. Raiders steal descending balls and falling capsules; hit a carrier with another ball or a laser, or use pulse to recover its cargo. Armored violet sentinels take two hits. Amber bombers warn and lock their aim before firing; their bombs briefly narrow your paddle and drain charge, and can be intercepted with balls, lasers, or pulse.
+
+Ten pickups include multiball, twin lasers, wide paddle, slow time, magnet catch, floor shields, extra hull, prism pierce, cryo field, and capsule magnet. Pierce damages each brick once per passage; cryo freezes hostile clocks and bombs while balls stay live. Guardians fire wider volleys below half health.
+
+Between sectors, choose two shields, a hull repair, or a powered launch. Clearing sectors 4 and 8 unlocks checkpoints at 5 and 9. Checkpoint flights begin with a fresh score and three lives; best score and unlocked checkpoints stay on the current device.
 
 ## Development
 
-`npm install`, `npm run dev`, `npm test`, `npm run build`.
+`npm install`, `npm run dev`, `npm test`, `node tests/projection.test.mjs`, `node tests/campaign.test.cjs`, `npm run build`.
 
-Game simulation is in `app/game/model.ts`, rendering in `app/game/arena.ts`, and the React HUD in `app/page.tsx`. Tests cover collisions, power-ups, pause, captures, rescue, escape, gameover, stage progression, and the age-limit capture regression.
+Game simulation is in `app/game/model.ts`, campaign patterns in `campaign.ts`, enemy behavior in `encounters.ts`, rendering in `arena.ts` and `encounter-visuals.ts`, and the React HUD in `app/page.tsx`. Tests cover collisions, power-ups, pause, captures, rescue, escape, armor, warnings, freeze, supplies, and campaign progression. The seeded campaign test plays through real physics with an automated paddle; it verifies reachability and state invariants, not human difficulty or rendering performance. Projection tests protect the approved board framing and pointer alignment.
 
 ## Sources and original assets
 

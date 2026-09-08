@@ -5,7 +5,7 @@ const ts = require('typescript');
 const path = require('node:path');
 const os = require('node:os');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ark22-test-'));
-const compiled = path.join(temp, 'model.cjs');
+const compiled = path.join(temp, 'model.js');
 const file = path.resolve(__dirname, '../app/game/model.ts');
 const source = fs.readFileSync(file, 'utf8');
 fs.writeFileSync(
@@ -17,6 +17,19 @@ fs.writeFileSync(
     },
   }).outputText,
 );
+for (const name of ['campaign', 'encounters']) {
+  const helper = path.resolve(__dirname, `../app/game/${name}.ts`);
+  if (fs.existsSync(helper))
+    fs.writeFileSync(
+      path.join(temp, `${name}.js`),
+      ts.transpileModule(fs.readFileSync(helper, 'utf8'), {
+        compilerOptions: {
+          module: ts.ModuleKind.CommonJS,
+          target: ts.ScriptTarget.ES2022,
+        },
+      }).outputText,
+    );
+}
 const { Game } = require(compiled);
 const results = [];
 function test(name, fn) {
@@ -51,6 +64,9 @@ function drone(g, props = {}) {
     z: 0,
     age: 0,
     hp: 1,
+    kind: 'thief',
+    fireIn: 4,
+    aimX: 0,
     ball: null,
     cargo: null,
     escape: 0,
@@ -140,21 +156,21 @@ test('multiball limits to seven balls', () => {
   for (let i = 0; i < 10; i++) g.collect('multi');
   assert.equal(g.balls.length, 7);
 });
-test('six sector completion transitions reach victory', () => {
+test('twelve sector completion transitions reach victory', () => {
   const g = play();
-  for (let level = 0; level < 6; level++) {
+  for (let level = 0; level < 12; level++) {
     assert.equal(g.level, level);
     g.bricks = [];
     g.boss = 0;
     g.step(0.01);
-    assert.equal(g.mode, level === 5 ? 'victory' : 'clear');
-    if (level < 5) {
+    assert.equal(g.mode, level === 11 ? 'victory' : 'clear');
+    if (level < 11) {
       g.action();
       assert.equal(g.mode, 'ready');
       g.action();
     }
   }
-  assert.equal(g.level, 5);
+  assert.equal(g.level, 11);
 });
 test('capture then rescue pulse releases ball', () => {
   const g = play();
@@ -199,6 +215,127 @@ test('capture at raider age limit never leaves an orphan ball', () => {
     g.drones.some((d) => d.id === b.captor) || b.captor === null,
     JSON.stringify({ captor: b.captor, drones: g.drones.length, mode: g.mode }),
   );
+});
+test('pierce damages armor once per passage and keeps its direction', () => {
+  const g = play();
+  g.bricks = [{ id: g.id(), x: 0, z: 0, hp: 3, max: 3, row: 0, burst: false }];
+  g.collect('pierce');
+  Object.assign(g.balls[0], { x: 0, z: 0.7, vx: 0, vz: -10 });
+  advance(g, 0.14);
+  assert.equal(g.bricks[0].hp, 2);
+  assert(g.balls[0].vz < 0);
+});
+test('sentinel requires two hits and pays only once', () => {
+  const g = play(),
+    d = drone(g, { kind: 'sentinel', hp: 2 });
+  const before = g.score;
+  g.hitDrone(d);
+  assert.equal(d.hp, 1);
+  assert(g.drones.includes(d));
+  g.hitDrone(d);
+  assert(!g.drones.includes(d));
+  const paid = g.score;
+  g.hitDrone(d);
+  assert(paid > before);
+  assert.equal(g.score, paid);
+});
+test('freeze halts enemy, bomb, escape and spawn clocks but not ball physics', () => {
+  const g = play();
+  const d = drone(g, { kind: 'bomber', fireIn: 0.5 });
+  g.bombs.push({ id: g.id(), x: 5, z: 2, vx: 0, vz: 6 });
+  g.collect('freeze');
+  const before = JSON.stringify([g.drones, g.bombs, g.spawnIn, g.enemyTime]);
+  const z = g.balls[0].z;
+  advance(g, 0.25);
+  assert.equal(
+    JSON.stringify([g.drones, g.bombs, g.spawnIn, g.enemyTime]),
+    before,
+  );
+  assert.notEqual(g.balls[0].z, z);
+  assert(g.powers.freeze < 8);
+});
+test('bomber locks warning target before releasing its bomb', () => {
+  const g = play(),
+    d = drone(g, { kind: 'bomber', fireIn: 1, z: 1, x: 4 });
+  g.paddle = g.target = -3;
+  advance(g, 0.15);
+  assert.equal(g.bombs.length, 0);
+  assert(d.fireIn < 0.9);
+  const locked = d.aimX;
+  g.target = 3;
+  advance(g, 0.9);
+  assert.equal(g.bombs.length, 1);
+  assert.equal(d.aimX, locked);
+});
+test('bomb hit jams briefly without directly removing hull and pulse clears bombs', () => {
+  const g = play();
+  Object.assign(g.balls[0], { x: 6, z: 3 });
+  g.bombs.push({ id: g.id(), x: 0, z: 8.12, vx: 0, vz: 6 });
+  g.step(0.02);
+  assert.equal(g.lives, 3);
+  assert(g.jam > 0 && g.width < 5.4);
+  assert.equal(g.bombs.length, 0);
+  g.bombs.push({ id: g.id(), x: 5, z: 2, vx: 0, vz: 6 });
+  g.energy = 100;
+  g.pulse();
+  assert.equal(g.bombs.length, 0);
+  assert.equal(g.jam, 0);
+});
+test('magnet pulls capsules toward paddle without overshoot', () => {
+  const g = play();
+  g.collect('magnet');
+  g.drops.push({ id: g.id(), x: 6, z: 3, kind: 'wide' });
+  advance(g, 0.4);
+  assert(g.drops[0].x < 6 && g.drops[0].x >= 0);
+});
+test('supply applies after reset, only once, and remains until launch', () => {
+  const g = play();
+  g.bricks = [];
+  g.boss = 0;
+  g.step(0.01);
+  g.chooseSupply('arsenal');
+  g.action();
+  assert.equal(g.mode, 'ready');
+  assert(g.powers.laser && g.powers.wide);
+  const seconds = g.powers.laser;
+  advance(g, 4);
+  assert.equal(g.powers.laser, seconds);
+  g.chooseSupply('repair');
+  assert.equal(g.lives, 3);
+});
+test('guardians appear in sectors 4, 8, 12 with increasing health', () => {
+  const g = ready(),
+    health = [];
+  for (let level = 0; level < 12; level++) {
+    g.level = level;
+    g.loadLevel();
+    if ((level + 1) % 4 === 0) {
+      assert(g.boss > 0);
+      health.push(g.boss);
+    } else assert.equal(g.boss, 0);
+  }
+  assert(health[0] < health[1] && health[1] < health[2]);
+});
+test('last-brick clear wins the same tick as final ball loss', () => {
+  const g = play();
+  g.lives = 1;
+  g.bricks = [];
+  g.boss = 0;
+  g.balls = [];
+  g.step(0.01);
+  assert.equal(g.mode, 'clear');
+  assert.equal(g.lives, 1);
+});
+test('restart clears hazards and supports campaign checkpoint starts', () => {
+  const g = play();
+  g.jam = 3;
+  g.bombs.push({ id: g.id(), x: 0, z: 1, vx: 0, vz: 6 });
+  g.start(8);
+  assert.equal(g.level, 8);
+  assert.equal(g.score, 0);
+  assert.equal(g.bombs.length, 0);
+  assert.equal(g.jam, 0);
+  assert.equal(g.mode, 'ready');
 });
 const output = {
   sha256: crypto.createHash('sha256').update(source).digest('hex'),

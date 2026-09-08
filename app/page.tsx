@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { POWER, SECTORS, type Snapshot, type Power } from './game/model';
+import { CAMPAIGN, SUPPLIES } from './game/campaign';
 import type { Arena } from './game/arena';
 const INITIAL: Snapshot = {
   mode: 'menu',
@@ -36,18 +37,24 @@ const INITIAL: Snapshot = {
   shield: 0,
   captured: false,
   boss: 0,
+  bossMax: 0,
+  bossWarning: false,
+  jam: 0,
+  supply: 'shield',
 };
 export default function Home() {
   const host = useRef<HTMLDivElement>(null),
     game = useRef<Arena | null>(null),
     bestRef = useRef(0),
-    savedRef = useRef(0);
+    savedRef = useRef(0),
+    checkpointRef = useRef(0);
   const [ready, setReady] = useState(false),
     [error, setError] = useState(''),
     [state, setState] = useState(INITIAL),
     [best, setBest] = useState(0),
     [sound, setSound] = useState(false),
-    [manual, setManual] = useState(false);
+    [manual, setManual] = useState(false),
+    [checkpoint, setCheckpoint] = useState(0);
   useEffect(() => {
     let gone = false;
     let instance: Arena | undefined;
@@ -58,13 +65,28 @@ export default function Home() {
         savedRef.current = saved;
       }
     } catch {}
+    try {
+      const saved = Number(localStorage.getItem('ark22-checkpoint'));
+      if (saved === 4 || saved === 8) {
+        checkpointRef.current = saved;
+      }
+    } catch {}
     import('./game/arena')
       .then(({ Arena }) => {
         if (gone || !host.current) return;
         instance = new Arena(host.current, (s) => {
           if (gone) return;
           setState(s);
+          const reached = s.level + (s.mode === 'clear' ? 1 : 0);
+          const unlocked = Math.min(8, Math.floor(reached / 4) * 4);
+          if (unlocked > checkpointRef.current) {
+            checkpointRef.current = unlocked;
+            try {
+              localStorage.setItem('ark22-checkpoint', String(unlocked));
+            } catch {}
+          }
           setBest(bestRef.current);
+          setCheckpoint(checkpointRef.current);
           if (s.score > bestRef.current) {
             bestRef.current = s.score;
             setBest(s.score);
@@ -196,6 +218,11 @@ export default function Home() {
         )}
       </div>
       <div className="power-stack">
+        {state.jam > 0 && (
+          <div className="active-power disrupted">
+            <Zap size={14} /> Paddle disrupted <time>{state.jam}s</time>
+          </div>
+        )}
         {state.combo > 1 && (
           <div className="combo">
             <Sparkles size={14} /> {state.combo}× COMBO
@@ -221,9 +248,12 @@ export default function Home() {
         )}
       </div>
       {state.boss > 0 && state.mode !== 'menu' && (
-        <div className="boss-health">
-          <span>THE LIGHT KEEPER</span>
-          <meter min={0} max={18} value={state.boss} />
+        <div className={`boss-health ${state.bossWarning ? 'warning' : ''}`}>
+          <span>
+            {CAMPAIGN[state.level].guardian?.name.toUpperCase()}
+            {state.bossWarning ? ' · VOLLEY INCOMING' : ''}
+          </span>
+          <meter min={0} max={state.bossMax} value={state.boss} />
         </div>
       )}
       <output
@@ -233,7 +263,9 @@ export default function Home() {
         {!overlay && state.notice}
       </output>
       {overlay && !manual && (
-        <section className="start-card">
+        <section
+          className={`start-card ${state.mode === 'clear' ? 'supply-card' : ''}`}
+        >
           <div className="eyebrow">
             <Radio size={15} />{' '}
             {state.mode === 'menu'
@@ -266,7 +298,7 @@ export default function Home() {
           <p>
             {state.mode === 'menu' ? (
               <>
-                Shatter the grid. Outsmart the raiders.
+                Twelve sectors. Three guardians. Ten power-ups.
                 <br />
                 Keep the light alive.
               </>
@@ -275,7 +307,7 @@ export default function Home() {
             ) : state.mode === 'clear' ? (
               `${SECTORS[state.level]} cleared. ${SECTORS[state.level + 1]} awaits.`
             ) : state.mode === 'victory' ? (
-              'Six sectors cleared. The light keeper is restored.'
+              'Twelve sectors cleared. Every guardian restored. The future is bright.'
             ) : (
               <>
                 The garden is waiting.
@@ -284,6 +316,31 @@ export default function Home() {
               </>
             )}
           </p>
+          {state.mode === 'clear' && (
+            <fieldset className="supply-options">
+              <legend>Choose your next-sector supply</legend>
+              {SUPPLIES.map((supply) => (
+                <button
+                  key={supply.kind}
+                  type="button"
+                  aria-pressed={state.supply === supply.kind}
+                  onClick={() => {
+                    game.current?.game.chooseSupply(supply.kind);
+                    host.current?.querySelector('canvas')?.focus();
+                  }}
+                >
+                  <b>{supply.title}</b>
+                  <span>{supply.detail}</span>
+                </button>
+              ))}
+              {(state.level === 3 || state.level === 7) && (
+                <small>
+                  Checkpoint unlocked · Sector{' '}
+                  {String(state.level + 2).padStart(2, '0')}
+                </small>
+              )}
+            </fieldset>
+          )}
           {isEnd && (
             <div className="final-score">
               {state.score.toLocaleString()}
@@ -306,6 +363,20 @@ export default function Home() {
                     : 'Fly again'}
             {isEnd ? <RotateCcw size={18} /> : <ArrowUpRight size={20} />}
           </button>
+          {checkpoint > 0 &&
+            ['menu', 'gameover', 'victory'].includes(state.mode) && (
+              <button
+                className="checkpoint-button"
+                disabled={!ready || !!error}
+                onClick={() => {
+                  game.current?.game.start(checkpoint);
+                  host.current?.querySelector('canvas')?.focus();
+                }}
+              >
+                Continue from Sector {String(checkpoint + 1).padStart(2, '0')}
+                <small>3 hull · fresh score · saved on this device</small>
+              </button>
+            )}
           {state.mode === 'paused' && (
             <button
               className="text-button"
@@ -363,7 +434,7 @@ export default function Home() {
         <DialogContent className="flight-manual">
           <DialogTitle>Flight manual</DialogTitle>
           <DialogDescription>
-            Keep the ball alive. Clear all six sectors.
+            Keep the ball alive. Restore 12 sectors and three guardians.
           </DialogDescription>
           <div className="manual-controls">
             <p>
@@ -383,6 +454,26 @@ export default function Home() {
               Hit them with a ball or laser, or pulse before they escape.
             </p>
             <p>
+              <b>Sentinels</b> Violet armor takes two hits. Their rings show
+              when the armor breaks.
+            </p>
+            <p>
+              <b>Bombers & guardians</b> Amber warnings mean an aimed volley is
+              coming. Move after they lock on. Balls and lasers destroy bombs;
+              paddle hits briefly narrow your paddle and drain pulse charge,
+              without directly costing hull.
+            </p>
+            <p>
+              <b>New specials</b> Prism pierce passes through bricks, cryo field
+              freezes enemies and bombs, and capsule magnet pulls drops toward
+              your paddle.
+            </p>
+            <p>
+              <b>Supplies & checkpoints</b> Choose shields, hull repair, or a
+              powered launch between sectors. Clearing sectors 4 and 8 unlocks a
+              fresh flight from the next sector on this device.
+            </p>
+            <p>
               <b>Pause · P</b> Switching tabs also pauses your flight.
             </p>
           </div>
@@ -397,8 +488,9 @@ export default function Home() {
             ))}
           </div>
           <p className="manual-foot">
-            Silver plates take two hits. Luminous bricks chain-react. Keep
-            consecutive brick hits going to grow your score multiplier.
+            Silver plates take extra hits. The Aurora vault has three-hit armor.
+            Luminous bricks chain-react. Keep consecutive brick hits going to
+            grow your score multiplier.
           </p>
           <a
             className="source-link"

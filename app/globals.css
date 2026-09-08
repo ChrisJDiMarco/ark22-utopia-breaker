@@ -418,6 +418,78 @@ kbd {
 .notice:empty {
   display: none;
 }
+.notice {
+  white-space: normal;
+  width: max-content;
+  max-width: min(640px, 90vw);
+}
+.disrupted, .boss-health.warning {
+  color: #9a4814;
+  border-color: #eea565;
+}
+.supply-card {
+  max-height: 78dvh;
+  overflow-y: auto;
+}
+.supply-card h1 {
+  font-size: 30px;
+  margin: 12px 0;
+}
+.supply-options {
+  display: grid;
+  gap: 8px;
+  padding: 0;
+  margin: 18px 0;
+  border: 0;
+  text-align: left;
+}
+.supply-options legend {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.supply-options button {
+  padding: 10px 12px;
+  border: 1px solid #b9d2d8;
+  border-radius: 10px;
+  background: #ffffff90;
+  color: #244652;
+  text-align: left;
+}
+.supply-options button[aria-pressed='true'] {
+  border-color: #218496;
+  background: #d7f3f6;
+  box-shadow: inset 3px 0 #218496;
+}
+.supply-options b, .supply-options span, .checkpoint-button small {
+  display: block;
+  font-size: 14px;
+}
+.supply-options span {
+  margin-top: 3px;
+  line-height: 1.35;
+}
+.supply-options small {
+  text-align: center;
+  color: #226879;
+  font-size: 12px;
+}
+.checkpoint-button {
+  width: 100%;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #9cbec8;
+  border-radius: 12px;
+  color: #244652;
+  background: #e5f5f7;
+  font-size: 14px;
+  font-weight: 600;
+}
+.checkpoint-button small {
+  font-size: 12px;
+  font-weight: 400;
+  margin-top: 4px;
+}
 .notice.danger {
   color: #97334b;
   background: #fff0f5ef;
