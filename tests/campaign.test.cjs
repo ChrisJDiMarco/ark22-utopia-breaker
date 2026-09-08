@@ -4,7 +4,7 @@ const path = require('node:path');
 const os = require('node:os');
 const ts = require('typescript');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ark22-campaign-'));
-for (const name of ['model', 'campaign', 'encounters', 'rewards']) {
+for (const name of ['model', 'campaign', 'encounters', 'rewards', 'disco']) {
   const source = fs.readFileSync(
     path.resolve(__dirname, `../app/game/${name}.ts`),
     'utf8',
@@ -20,6 +20,7 @@ for (const name of ['model', 'campaign', 'encounters', 'rewards']) {
   );
 }
 const { Game } = require(path.join(temp, 'model.js'));
+const variant = process.env.ARK22_MODE === 'disco' ? 'disco' : 'classic';
 const runs = [];
 for (let run = 0; run < 6; run++) {
   const initial = 0;
@@ -29,7 +30,7 @@ for (let run = 0; run < 6; run++) {
     return seed / 2 ** 32;
   };
   const g = new Game(rand);
-  g.start();
+  g.start(0, variant);
   g.level = initial;
   g.loadLevel();
   g.action();
@@ -90,6 +91,13 @@ for (let run = 0; run < 6; run++) {
       );
     }
     assert(g.bombs.length <= 12);
+    if (variant === 'disco') {
+      assert(g.balls.length <= 7);
+      assert(g.drones.length <= 4);
+      assert(g.drops.length <= 3);
+      assert(g.pendingDrops.length <= 12);
+      assert(g.regrowth.length <= 8);
+    }
     for (const d of g.drones)
       assert(Number.isFinite(d.x) && Number.isFinite(d.z));
     assert(g.energy >= 0 && g.energy <= 100);
@@ -98,6 +106,7 @@ for (let run = 0; run < 6; run++) {
     g.events = [];
   }
   runs.push({
+    variant,
     seed: 1421 + run,
     initialSector: initial + 1,
     finalSector: g.level + 1,

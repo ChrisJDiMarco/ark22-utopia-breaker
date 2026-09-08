@@ -788,3 +788,28 @@ kbd {
 .arena-backdrop{position:absolute;inset:0;background:url('/textures/arena-clean-plate.png') center / 100% 100% no-repeat;pointer-events:none}
 
 .supply-options button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Disco is an opt-in remix; the original arena and projection remain intact. */
+.mode-options{display:grid;grid-template-columns:1fr 1fr;gap:8px;border:0;padding:0;margin:0 0 14px;text-align:left}
+.mode-options legend{font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#506974;margin-bottom:8px}
+.mode-options button{border:1px solid #78909d66;background:#ffffff80;border-radius:10px;padding:10px 9px;color:#25414d;text-align:left;cursor:pointer}
+.mode-options button[aria-pressed="true"]{border-color:#275c75;background:#e0f6fa;box-shadow:inset 0 0 0 1px #275c75}
+.mode-options button b{display:flex;align-items:center;gap:5px;font-size:12px}
+.mode-options button small{display:block;font-size:9px;line-height:1.4;margin-top:4px;opacity:.85}
+.mode-options button:last-child[aria-pressed="true"]{color:#fff;border-color:#a474df;background:linear-gradient(125deg,#6633a1,#285987);box-shadow:inset 0 0 0 1px #dfb9ff}
+.mode-options button:focus-visible{outline:3px solid #e151be;outline-offset:3px}
+.is-disco .arena-backdrop{filter:brightness(.58) saturate(1.45);background-color:#272342}
+.is-disco .wordmark,.is-disco .wordmark span,.is-disco .wordmark small,.is-disco .sector{color:#fff3ff;text-shadow:0 1px 8px #12072e}
+.is-disco .scoreboard{background:#251b3bdb;border-radius:12px;padding:8px 14px;color:#fff}
+.is-disco .scoreboard small,.is-disco .scoreboard strong,.is-disco .scoreboard em{color:#f5e8ff}
+.is-disco .start-card{background:linear-gradient(145deg,#fcf5ffff,#e5edffff);border-color:#d8baff;box-shadow:0 0 65px #cb48de44,0 24px 70px #0e193755}
+.is-disco .primary{background:linear-gradient(115deg,#7634a6,#315992);border-color:#9e65b7}
+.is-disco .notice{background:#211338e8;color:#fff0ff;border-color:#a082c4}
+.disco-event{position:absolute;top:115px;left:50%;transform:translateX(-50%);padding:8px 14px;background:#221934ed;color:#fff;border:1px solid;border-radius:12px;pointer-events:none;white-space:nowrap;box-shadow:0 5px 20px #20103633}
+.disco-event>span{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:650;letter-spacing:.6px}
+.disco-event time{margin-left:auto;padding-left:14px;color:#f2d7ff;font-variant-numeric:tabular-nums}
+.disco-event small{display:block;font-size:10px;color:#e2d6ef;margin-top:4px}
+.is-disco .boss-health{top:174px}
+.is-disco .active-power{background:#f3eaffed}
+@media(max-width:800px){.disco-event{top:116px;padding:6px 9px}.disco-event>span{font-size:10px}.disco-event small{font-size:9px}.is-disco .boss-health{top:174px}.is-disco .scoreboard{padding:6px 10px}.mode-options button{padding:8px}}
+@media(max-height:600px) and (min-width:700px){.mode-options{margin-bottom:8px}.mode-options legend{display:none}.mode-options button{padding:6px 8px}.mode-options button small{display:none}.disco-event{top:88px}.is-disco .boss-health{top:141px}}

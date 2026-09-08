@@ -17,7 +17,7 @@ fs.writeFileSync(
     },
   }).outputText,
 );
-for (const name of ['campaign', 'encounters', 'rewards']) {
+for (const name of ['campaign', 'encounters', 'rewards', 'disco']) {
   const helper = path.resolve(__dirname, `../app/game/${name}.ts`);
   if (fs.existsSync(helper))
     fs.writeFileSync(

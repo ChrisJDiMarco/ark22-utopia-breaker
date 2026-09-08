@@ -9,6 +9,7 @@ import { Reflector } from 'three/addons/objects/Reflector.js';
 import { alignArena } from './projection';
 import { createTrail, updateTrail, fragmentBudget } from './effects';
 import { enemyVisual, animateEnemy, bombVisual } from './encounter-visuals';
+import { discoVisuals } from './disco-visuals';
 import { Game, POWER, type Snapshot, type FX, type Power } from './model';
 
 type Particle = {
@@ -51,6 +52,9 @@ export class Arena {
   frameSum = 0;
   frameN = 0;
   loaded = 0;
+  private disco = discoVisuals();
+  private discoTinted = false;
+  private lastBeat = -1;
   private ray = new T.Raycaster();
   private plane = new T.Plane(new T.Vector3(0, 1, 0), -0.4);
   private cleanups: (() => void)[] = [];
@@ -175,6 +179,7 @@ export class Arena {
     this.scene.fog = null;
     this.world.scale.x = 1.5;
     this.scene.add(this.world);
+    this.world.add(this.disco.group);
     const pm = new T.PMREMGenerator(this.renderer),
       room = new RoomEnvironment();
     this.env = pm.fromScene(room, 0.03);
@@ -485,6 +490,34 @@ export class Arena {
   }
 
   private sync() {
+    const disco = this.game.variant === 'disco';
+    this.disco.update(this.game, this.reduced);
+    if (disco || this.discoTinted) {
+      const time = this.reduced ? 0 : this.game.discoTime;
+      this.brickMaterials.forEach((material, i) => {
+        if (disco) {
+          material.color.setHSL((i / 6 + time * 0.018) % 1, 0.8, 0.63);
+          material.emissive.copy(material.color);
+          material.emissiveIntensity = 0.32;
+        } else {
+          material.color.setHex(COLORS[i]);
+          material.emissive.setHex(0);
+          material.emissiveIntensity = 1;
+        }
+      });
+      this.discoTinted = disco;
+    }
+    const beat = Math.floor((this.game.discoTime * 124) / 60);
+    if (disco && this.game.mode === 'playing' && beat !== this.lastBeat) {
+      this.tone(beat % 4 === 0 ? 100 : 180, 0.12, 'triangle', 0.035);
+      this.tone(
+        [261.63, 329.63, 392, 440][Math.floor(beat / 4) % 4],
+        0.17,
+        'sine',
+        0.016,
+      );
+    }
+    this.lastBeat = disco ? beat : -1;
     const alive = new Set<number>();
     for (const br of this.game.bricks) {
       alive.add(br.id);

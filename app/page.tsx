@@ -21,10 +21,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { POWER, SECTORS, type Snapshot, type Power } from './game/model';
+import { VARIANTS, recordKey, type Variant } from './game/disco';
 import { CAMPAIGN, SUPPLIES } from './game/campaign';
 import type { Arena } from './game/arena';
 const INITIAL: Snapshot = {
   mode: 'menu',
+  variant: 'classic',
+  disco: null,
   score: 0,
   level: 0,
   lives: 3,
@@ -49,9 +52,9 @@ const INITIAL: Snapshot = {
 export default function Home() {
   const host = useRef<HTMLDivElement>(null),
     game = useRef<Arena | null>(null),
-    bestRef = useRef(0),
-    savedRef = useRef(0),
-    checkpointRef = useRef(0);
+    bestRef = useRef({ classic: 0, disco: 0 }),
+    savedRef = useRef({ classic: 0, disco: 0 }),
+    checkpointRef = useRef({ classic: 0, disco: 0 });
   const [ready, setReady] = useState(false),
     [error, setError] = useState(''),
     [state, setState] = useState(INITIAL),
@@ -61,47 +64,54 @@ export default function Home() {
     [checkpoint, setCheckpoint] = useState(0);
   useEffect(() => {
     let gone = false;
+    const bestRecords = bestRef.current;
     let instance: Arena | undefined;
-    try {
-      const saved = Number(localStorage.getItem('ark22-best'));
-      if (Number.isFinite(saved) && saved > 0) {
-        bestRef.current = saved;
-        savedRef.current = saved;
-      }
-    } catch {}
-    try {
-      const saved = Number(localStorage.getItem('ark22-checkpoint'));
-      if (saved === 4 || saved === 8) {
-        checkpointRef.current = saved;
-      }
-    } catch {}
+    for (const variant of VARIANTS) {
+      try {
+        const saved = Number(localStorage.getItem(recordKey(variant, 'best')));
+        if (Number.isFinite(saved) && saved > 0) {
+          bestRef.current[variant] = saved;
+          savedRef.current[variant] = saved;
+        }
+        const checkpoint = Number(
+          localStorage.getItem(recordKey(variant, 'checkpoint')),
+        );
+        if (checkpoint === 4 || checkpoint === 8)
+          checkpointRef.current[variant] = checkpoint;
+      } catch {}
+    }
     import('./game/arena')
       .then(({ Arena }) => {
         if (gone || !host.current) return;
         instance = new Arena(host.current, (s) => {
           if (gone) return;
           setState(s);
+          const variant = s.variant;
           const reached = s.level + (s.mode === 'clear' ? 1 : 0);
           const unlocked = Math.min(8, Math.floor(reached / 4) * 4);
-          if (unlocked > checkpointRef.current) {
-            checkpointRef.current = unlocked;
+          if (unlocked > checkpointRef.current[variant]) {
+            checkpointRef.current[variant] = unlocked;
             try {
-              localStorage.setItem('ark22-checkpoint', String(unlocked));
+              localStorage.setItem(
+                recordKey(variant, 'checkpoint'),
+                String(unlocked),
+              );
             } catch {}
           }
-          setBest(bestRef.current);
-          setCheckpoint(checkpointRef.current);
-          if (s.score > bestRef.current) {
-            bestRef.current = s.score;
-            setBest(s.score);
-          }
+          if (s.score > bestRef.current[variant])
+            bestRef.current[variant] = s.score;
+          setBest(bestRef.current[variant]);
+          setCheckpoint(checkpointRef.current[variant]);
           if (
             ['clear', 'gameover', 'victory'].includes(s.mode) &&
-            bestRef.current > savedRef.current
+            bestRef.current[variant] > savedRef.current[variant]
           )
             try {
-              localStorage.setItem('ark22-best', String(bestRef.current));
-              savedRef.current = bestRef.current;
+              localStorage.setItem(
+                recordKey(variant, 'best'),
+                String(bestRef.current[variant]),
+              );
+              savedRef.current[variant] = bestRef.current[variant];
             } catch {}
           if (host.current?.dataset.error) setError(host.current.dataset.error);
         });
@@ -116,14 +126,29 @@ export default function Home() {
       });
     return () => {
       gone = true;
-      try {
-        localStorage.setItem('ark22-best', String(bestRef.current));
-      } catch {}
+      for (const variant of VARIANTS) {
+        try {
+          localStorage.setItem(
+            recordKey(variant, 'best'),
+            String(bestRecords[variant]),
+          );
+        } catch {}
+      }
       instance?.dispose();
       game.current = null;
     };
   }, []);
   const action = () => game.current?.action();
+  const selectVariant = (variant: Variant) => {
+    const arena = game.current;
+    if (!arena || !['menu', 'gameover', 'victory'].includes(arena.game.mode))
+      return;
+    arena.game.start(0, variant);
+    arena.game.mode = 'menu';
+    setState(arena.game.snapshot());
+    setBest(bestRef.current[variant]);
+    setCheckpoint(checkpointRef.current[variant]);
+  };
   const toggleSound = () => {
     const next = !sound;
     setSound(next);
@@ -161,7 +186,9 @@ export default function Home() {
     state.mode,
   );
   return (
-    <main className="game-shell">
+    <main
+      className={`game-shell ${state.variant === 'disco' ? 'is-disco' : ''}`}
+    >
       <div className="arena-backdrop" aria-hidden="true" />
       <div ref={host} className="arena" aria-label="3D brick breaker arena" />
       <header className="topbar">
@@ -198,7 +225,9 @@ export default function Home() {
           <strong>{String(state.score).padStart(6, '0')}</strong>
         </div>
         <div>
-          <small>BEST · THIS DEVICE</small>
+          <small>
+            BEST · {state.variant === 'disco' ? 'DISCO' : 'THIS DEVICE'}
+          </small>
           <strong>{String(best).padStart(6, '0')}</strong>
         </div>
         <div className="lives">
@@ -225,6 +254,15 @@ export default function Home() {
           </div>
         )}
       </div>
+      {state.disco && !overlay && (
+        <div className="disco-event" style={{ borderColor: state.disco.color }}>
+          <span>
+            <Sparkles size={14} /> DISCO / {state.disco.name}{' '}
+            <time>{state.disco.seconds}s</time>
+          </span>
+          <small>{state.disco.detail}</small>
+        </div>
+      )}
       <div className="power-stack">
         {state.jam > 0 && (
           <div className="active-power disrupted">
@@ -279,7 +317,9 @@ export default function Home() {
           <div className="eyebrow">
             <Radio size={15} />{' '}
             {state.mode === 'menu'
-              ? 'SYSTEMS ONLINE · 2186'
+              ? state.variant === 'disco'
+                ? 'AFTER HOURS · 2186'
+                : 'SYSTEMS ONLINE · 2186'
               : state.mode === 'paused'
                 ? 'FLIGHT SUSPENDED'
                 : state.mode === 'clear'
@@ -291,9 +331,13 @@ export default function Home() {
           <h1>
             {state.mode === 'menu' ? (
               <>
-                A brighter kind
+                {state.variant === 'disco'
+                  ? 'Break the bricks.'
+                  : 'A brighter kind'}
                 <br />
-                of destruction.
+                {state.variant === 'disco'
+                  ? 'Own the dance floor.'
+                  : 'of destruction.'}
               </>
             ) : state.mode === 'paused' ? (
               'Take a breath.'
@@ -308,9 +352,13 @@ export default function Home() {
           <p>
             {state.mode === 'menu' ? (
               <>
-                Twelve sectors. Three guardians. Ten power-ups.
+                {state.variant === 'disco'
+                  ? 'Power showers. Neon bumpers. Raider rushes.'
+                  : 'Twelve sectors. Three guardians. Ten power-ups.'}
                 <br />
-                Keep the light alive.
+                {state.variant === 'disco'
+                  ? 'The grid grows back. Keep the party alive.'
+                  : 'Keep the light alive.'}
               </>
             ) : state.mode === 'paused' ? (
               'Your flight is right where you left it.'
@@ -364,6 +412,29 @@ export default function Home() {
               <small>POINTS</small>
             </div>
           )}
+          {(state.mode === 'menu' || isEnd) && (
+            <fieldset className="mode-options" disabled={!ready || !!error}>
+              <legend>Choose your flight</legend>
+              <button
+                type="button"
+                aria-pressed={state.variant === 'classic'}
+                onClick={() => selectVariant('classic')}
+              >
+                <b>Classic</b>
+                <small>Precision & progression</small>
+              </button>
+              <button
+                type="button"
+                aria-pressed={state.variant === 'disco'}
+                onClick={() => selectVariant('disco')}
+              >
+                <b>
+                  <Sparkles size={13} /> Disco mode
+                </b>
+                <small>All-out arcade energy</small>
+              </button>
+            </fieldset>
+          )}
           <button
             className="primary"
             disabled={!ready || !!error}
@@ -372,7 +443,9 @@ export default function Home() {
             {!ready
               ? 'Preparing arena'
               : state.mode === 'menu'
-                ? 'Enter the arena'
+                ? state.variant === 'disco'
+                  ? 'Start Disco mode'
+                  : 'Enter the arena'
                 : state.mode === 'paused'
                   ? 'Resume flight'
                   : state.mode === 'clear'
@@ -468,6 +541,17 @@ export default function Home() {
             Keep the ball alive. Restore 12 sectors and three guardians.
           </DialogDescription>
           <div className="manual-controls">
+            <p>
+              <b>Disco mode</b> Choose it before launch for a separate 12-sector
+              remix and record. Four 14-second events rotate: Power Shower,
+              Raider Rush, Speed Fever (double brick points), and Rebuild Remix.
+              Seven balls, twelve laser bursts, and laser + pierce together.
+              Neon bumpers deflect balls; a third joins in Sector 5. Armored
+              enemies arrive from the first sector, guardians are tougher, and
+              green cores rebuild up to three times. Cryo pauses events and
+              rebuilding; pierce seals cores. Sound enables the disco beat. The
+              rules below describe Classic unless stated otherwise.
+            </p>
             <p>
               <b>Move</b> Mouse, drag, or ← → / A D. Hit near a paddle edge to
               aim a sharper rebound.

@@ -1,8 +1,13 @@
+import { discoPhaseIndex } from './disco';
 import { ENEMIES, CAMPAIGN } from './campaign';
 import { clamp, type Game, type Drop, type Drone } from './model';
 
 export function spawnEnemy(g: Game) {
-  const lineup = CAMPAIGN[g.level].enemies;
+  if (g.variant === 'disco' && g.drones.length >= 4) return;
+  const lineup =
+    g.variant === 'disco'
+      ? (['thief', 'sentinel', 'bomber'] as const)
+      : CAMPAIGN[g.level].enemies;
   const kind = lineup[g.wave++ % lineup.length];
   g.drones.push({
     id: g.id(),
@@ -10,7 +15,9 @@ export function spawnEnemy(g: Game) {
     x: (g.random() - 0.5) * 12,
     z: -9.7,
     age: 0,
-    hp: ENEMIES[kind].hp + (kind === 'sentinel' && g.level >= 8 ? 1 : 0),
+    hp:
+      ENEMIES[kind].hp +
+      (kind === 'sentinel' && (g.level >= 8 || g.variant === 'disco') ? 1 : 0),
     ball: null,
     cargo: null,
     escape: 0,
@@ -67,9 +74,15 @@ export function stepEnemies(g: Game, dt: number) {
     g.spawnIn -= dt;
     if (
       g.spawnIn <= 0 &&
-      g.drones.length < (g.level < 3 ? 1 : g.level < 8 ? 2 : 3)
+      g.drones.length <
+        (g.variant === 'disco' ? 4 : g.level < 3 ? 1 : g.level < 8 ? 2 : 3)
     ) {
-      g.spawnIn = Math.max(9, 18 - g.level * 0.8);
+      g.spawnIn =
+        g.variant === 'disco'
+          ? discoPhaseIndex(g.discoTime) === 1
+            ? 1.8
+            : Math.max(3, 5 - g.level * 0.15)
+          : Math.max(9, 18 - g.level * 0.8);
       spawnEnemy(g);
     }
     if (g.boss > 0) {
@@ -125,7 +138,7 @@ export function stepEnemies(g: Game, dt: number) {
           if (previous > 0.9 && d.fireIn <= 0.9) d.aimX = g.paddle;
           if (d.fireIn <= 0) {
             launchBomb(g, d.x, d.z, d.aimX);
-            d.fireIn = 4.5;
+            d.fireIn = g.variant === 'disco' ? 3 : 4.5;
           }
         }
       }

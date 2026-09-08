@@ -5,6 +5,13 @@ import {
   type EnemyKind,
   type Supply,
 } from './campaign';
+import {
+  collideBumpers,
+  discoPhase,
+  discoPhaseIndex,
+  stepDisco,
+  type Variant,
+} from './disco';
 import { stepEnemies } from './encounters';
 import {
   prepareCaches,
@@ -110,6 +117,8 @@ export type FX = {
 };
 export type Snapshot = {
   mode: Mode;
+  variant: Variant;
+  disco: ReturnType<typeof discoPhase> | null;
   score: number;
   level: number;
   lives: number;
@@ -139,6 +148,10 @@ export function rebound(offset: number, speed: number) {
 }
 export class Game {
   mode: Mode = 'menu';
+  variant: Variant = 'classic';
+  discoTime = 0;
+  discoDropIn = 2;
+  discoDrops = 0;
   resumeMode: Mode = 'ready';
   score = 0;
   level = 0;
@@ -190,7 +203,12 @@ export class Game {
   get speed() {
     return (
       (9.4 + this.level * 0.75 + Math.min(this.broken * 0.022, 1.8)) *
-      (this.powers.slow ? 0.82 : 1)
+      (this.powers.slow ? 0.82 : 1) *
+      (this.variant === 'disco'
+        ? discoPhaseIndex(this.discoTime) === 2
+          ? 1.22
+          : 1.08
+        : 1)
     );
   }
   id() {
@@ -200,7 +218,9 @@ export class Game {
     this.notice = text;
     this.noticeUntil = this.time + duration;
   }
-  start(checkpoint = 0) {
+  start(checkpoint = 0, variant: Variant = this.variant) {
+    this.variant = variant;
+    this.events = [];
     this.score = 0;
     this.level = [0, 4, 8].includes(checkpoint) ? checkpoint : 0;
     this.lives = 3;
@@ -212,6 +232,9 @@ export class Game {
     this.say(CAMPAIGN[this.level].hint, 8);
   }
   loadLevel() {
+    this.discoTime = 0;
+    this.discoDropIn = 2;
+    this.discoDrops = this.level * 2;
     this.bricks = [];
     this.balls = [];
     this.drops = [];
@@ -238,6 +261,7 @@ export class Game {
     this.paddle = 0;
     this.target = 0;
     this.bossMax = CAMPAIGN[this.level].guardian?.hp ?? 0;
+    if (this.variant === 'disco') this.bossMax = Math.ceil(this.bossMax * 1.5);
     this.boss = this.bossMax;
     for (let r = 0; r < 9; r++)
       for (let c = 0; c < 11; c++) {
@@ -262,12 +286,28 @@ export class Game {
             this.level > 1 && (r * 11 + c) % (this.level === 6 ? 5 : 13) === 0,
         });
       }
+    if (this.variant === 'disco') {
+      this.spawnIn = 5;
+      for (const brick of this.bricks) {
+        if (brick.id % 3 === 0)
+          brick.hp = brick.max = Math.min(4, brick.hp + 1);
+      }
+    }
     prepareCaches(this);
     this.total = this.bricks.length;
     this.addBall(0, 7.85, true);
   }
   addBall(x: number, z: number, held = false, angle = 0) {
-    if (this.balls.length >= (this.level < 4 ? 3 : this.level < 8 ? 4 : 5))
+    if (
+      this.balls.length >=
+      (this.variant === 'disco'
+        ? 7
+        : this.level < 4
+          ? 3
+          : this.level < 8
+            ? 4
+            : 5)
+    )
       return;
     const v = rebound(angle, this.speed);
     this.balls.push({
@@ -382,7 +422,7 @@ export class Game {
       this.laserAmmo <= 0
     )
       return;
-    this.fireIn = 0.8;
+    this.fireIn = this.variant === 'disco' ? 0.35 : 0.8;
     this.laserAmmo--;
     if (this.laserAmmo === 0) delete this.powers.laser;
     for (const x of [-this.width * 0.38, this.width * 0.38])
@@ -428,15 +468,19 @@ export class Game {
     else if (kind === 'life') this.lives = Math.min(5, this.lives + 1);
     else {
       if (kind === 'laser') {
-        delete this.powers.pierce;
-        this.laserAmmo = 6;
+        if (this.variant === 'classic') delete this.powers.pierce;
+        this.laserAmmo = this.variant === 'disco' ? 12 : 6;
       }
       if (kind === 'pierce') {
-        delete this.powers.laser;
-        this.laserAmmo = 0;
+        if (this.variant === 'classic') {
+          delete this.powers.laser;
+          this.laserAmmo = 0;
+        }
         for (const ball of this.balls) ball.pierceHits = 0;
       }
-      this.powers[kind] = POWER[kind].duration;
+      this.powers[kind] =
+        POWER[kind].duration *
+        (this.variant === 'disco' && kind !== 'freeze' ? 1.3 : 1);
     }
   }
   hitDrone(d: Drone) {
@@ -466,8 +510,12 @@ export class Game {
         b.vz = Math.abs(b.vz);
       }
     }
-    if (d.cargo)
-      this.drops.push({ id: this.id(), x: d.x, z: d.z, kind: d.cargo });
+    if (d.cargo) {
+      const drop = { x: d.x, z: d.z, kind: d.cargo };
+      if (this.variant === 'classic' || this.drops.length < 3)
+        this.drops.push({ id: this.id(), ...drop });
+      else if (this.pendingDrops.length < 12) this.pendingDrops.push(drop);
+    }
     this.drones = this.drones.filter((o) => o.id !== d.id);
     this.score += d.kind === 'sentinel' ? 400 : 250;
     if (charge) this.energy = clamp(this.energy + 6, 0, 100);
@@ -501,7 +549,11 @@ export class Game {
       this.broken++;
       this.combo++;
       this.score +=
-        100 * Math.min(8, Math.max(1, Math.floor(this.combo / 4) + 1));
+        100 *
+        Math.min(8, Math.max(1, Math.floor(this.combo / 4) + 1)) *
+        (this.variant === 'disco' && discoPhaseIndex(this.discoTime) === 2
+          ? 2
+          : 1);
       this.energy = clamp(this.energy + 1.5, 0, 100);
     }
     if (br.burst && !chain) {
@@ -536,12 +588,17 @@ export class Game {
   private tick(dt: number) {
     this.time += dt;
     this.jam = Math.max(0, this.jam - dt);
-    this.energy = clamp(this.energy + dt * 0.65, 0, 100);
+    this.energy = clamp(
+      this.energy + dt * (this.variant === 'disco' ? 2.4 : 0.65),
+      0,
+      100,
+    );
     this.fireIn -= dt;
     for (const key of Object.keys(this.powers) as Power[]) {
       this.powers[key]! -= dt;
       if (this.powers[key]! <= 0) delete this.powers[key];
     }
+    stepDisco(this, dt);
     this.paddle +=
       (clamp(this.target, -8 + this.width / 2, 8 - this.width / 2) -
         this.paddle) *
@@ -606,6 +663,7 @@ export class Game {
         this.balls = this.balls.filter((o) => o.id !== b.id);
         continue;
       }
+      collideBumpers(this, b);
       for (const id of b.contacts) {
         const br = this.bricks.find((br) => br.id === id);
         if (!br || Math.abs(b.x - br.x) >= 0.86 || Math.abs(b.z - br.z) >= 0.51)
@@ -736,6 +794,8 @@ export class Game {
   snapshot(): Snapshot {
     return {
       mode: this.mode,
+      variant: this.variant,
+      disco: this.variant === 'disco' ? discoPhase(this.discoTime) : null,
       score: this.score,
       level: this.level,
       lives: this.lives,
