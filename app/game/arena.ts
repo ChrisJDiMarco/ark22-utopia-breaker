@@ -7,8 +7,9 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { alignArena } from './projection';
+import { createTrail, updateTrail, fragmentBudget } from './effects';
 import { enemyVisual, animateEnemy, bombVisual } from './encounter-visuals';
-import { Game, POWER, type Snapshot, type FX } from './model';
+import { Game, POWER, type Snapshot, type FX, type Power } from './model';
 
 type Particle = {
   mesh: T.Mesh;
@@ -37,7 +38,6 @@ export class Arena {
   shield: T.Mesh;
   particles: Particle[] = [];
   rings: { mesh: T.Mesh; life: number; max: number }[] = [];
-  trails = new Map<number, T.Vector3[]>();
   trailMeshes = new Map<number, T.Line>();
   clock = 0;
   last = 0;
@@ -96,6 +96,7 @@ export class Arena {
         envMapIntensity: 1.8,
       }),
   );
+  private labels = new Map<Power, T.MeshBasicMaterial>();
   private sharedGeo = new Set<T.BufferGeometry>();
   private sharedMat = new Set<T.Material>();
   private clearBrick = new T.MeshPhysicalMaterial({
@@ -112,6 +113,19 @@ export class Arena {
   private trimGeo = new RoundedBoxGeometry(1.3, 0.065, 0.62, 2, 0.04);
   private ballGeo = new T.SphereGeometry(0.4, 32, 20);
   private fragmentGeo = new T.TetrahedronGeometry(0.1);
+  private shotGeo = new T.CapsuleGeometry(0.045, 0.65, 3, 6);
+  private dropGeo = new RoundedBoxGeometry(0.68, 0.3, 0.68, 2, 0.12);
+  private labelGeo = new T.PlaneGeometry(0.5, 0.5);
+  private markerGeo = new T.TorusGeometry(0.18, 0.025, 6, 20);
+  private cacheMark = new T.MeshBasicMaterial({ color: 0xd49c2f });
+  private growthMark = new T.MeshBasicMaterial({ color: 0x36b87e });
+  private growthGhost = new T.MeshBasicMaterial({
+    color: 0x43b78c,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.3,
+    depthWrite: false,
+  });
   constructor(
     public host: HTMLElement,
     public onUpdate: (s: Snapshot) => void = () => {},
@@ -121,6 +135,10 @@ export class Arena {
       this.trimGeo,
       this.ballGeo,
       this.fragmentGeo,
+      this.shotGeo,
+      this.dropGeo,
+      this.labelGeo,
+      this.markerGeo,
     ])
       this.sharedGeo.add(g);
     for (const m of [
@@ -129,6 +147,9 @@ export class Arena {
       this.glow,
       this.ballMaterial,
       this.clearBrick,
+      this.cacheMark,
+      this.growthMark,
+      this.growthGhost,
       ...this.brickMaterials,
     ])
       this.sharedMat.add(m);
@@ -494,11 +515,35 @@ export class Arena {
           badge.position.y = 0.234;
           o.add(badge);
         }
+        if (br.cache || br.regen) {
+          const marker = new T.Mesh(
+            this.markerGeo,
+            br.cache ? this.cacheMark : this.growthMark,
+          );
+          marker.name = 'special-marker';
+          marker.position.set(0, 0.255, 0);
+          marker.rotation.x = -Math.PI / 2;
+          o.add(marker);
+        }
         o.position.set(br.x, 0.4, br.z);
         this.world.add(o);
         this.meshes.set(br.id, o);
       }
       o.scale.y = br.hp < br.max ? 0.7 : 1;
+      const marker = o.getObjectByName('special-marker');
+      if (marker) marker.visible = !!br.cache || !!br.regen;
+    }
+    for (const growth of this.game.regrowth) {
+      alive.add(growth.id);
+      let ghost = this.meshes.get(growth.id);
+      if (!ghost) {
+        ghost = new T.Mesh(this.brickGeo, this.growthGhost);
+        this.world.add(ghost);
+        this.meshes.set(growth.id, ghost);
+      }
+      ghost.position.set(growth.brick.x, 0.12, growth.brick.z);
+      ghost.scale.y =
+        0.15 + 0.65 * (1 - Math.max(0, growth.wait) / growth.duration);
     }
     const piercing = !!this.game.powers.pierce;
     this.ballMaterial.emissive.setHex(piercing ? 0xff792c : 0x30636f);
@@ -515,30 +560,16 @@ export class Arena {
       }
       o.position.set(b.x, b.captor !== null ? 0.85 : 0.39, b.z);
       if (!b.held) {
-        const points = this.trails.get(b.id) ?? [];
-        points.unshift(o.position.clone());
-        if (points.length > 16) points.pop();
-        this.trails.set(b.id, points);
         let line = this.trailMeshes.get(b.id);
         if (!line) {
-          line = new T.Line(
-            new T.BufferGeometry(),
-            new T.LineBasicMaterial({
-              color: 0x50dfff,
-              transparent: true,
-              opacity: 0.65,
-              blending: T.AdditiveBlending,
-              depthWrite: false,
-            }),
-          );
+          line = createTrail();
           this.world.add(line);
           this.trailMeshes.set(b.id, line);
         }
         (line.material as T.LineBasicMaterial).color.setHex(
           piercing ? 0xffae5c : 0x50dfff,
         );
-        line.geometry.dispose();
-        line.geometry = new T.BufferGeometry().setFromPoints(points);
+        updateTrail(line, o.position);
       }
     }
     for (const d of this.game.drones) {
@@ -575,27 +606,10 @@ export class Arena {
           emissive: POWER[drop.kind].color,
           emissiveIntensity: 0.3,
         });
-        const mesh = new T.Mesh(
-          new RoundedBoxGeometry(0.68, 0.3, 0.68, 2, 0.12),
-          mat,
-        );
+        const mesh = new T.Mesh(this.dropGeo, mat);
         mesh.castShadow = true;
         o.add(mesh);
-        const cv = document.createElement('canvas');
-        cv.width = 64;
-        cv.height = 64;
-        const c = cv.getContext('2d')!;
-        c.fillStyle = '#092e3b';
-        c.font = 'bold 48px sans-serif';
-        c.textAlign = 'center';
-        c.textBaseline = 'middle';
-        c.fillText(POWER[drop.kind].glyph, 32, 34);
-        const tex = new T.CanvasTexture(cv);
-        this.textures.push(tex);
-        const label = new T.Mesh(
-          new T.PlaneGeometry(0.5, 0.5),
-          new T.MeshBasicMaterial({ map: tex, transparent: true }),
-        );
+        const label = new T.Mesh(this.labelGeo, this.powerLabel(drop.kind));
         label.rotation.x = -Math.PI / 2;
         label.position.y = 0.16;
         o.add(label);
@@ -610,7 +624,7 @@ export class Arena {
       alive.add(s.id);
       let o = this.meshes.get(s.id);
       if (!o) {
-        o = new T.Mesh(new T.CapsuleGeometry(0.045, 0.65, 3, 6), this.glow);
+        o = new T.Mesh(this.shotGeo, this.glow);
         o.rotation.x = Math.PI / 2;
         this.world.add(o);
         this.meshes.set(s.id, o);
@@ -629,7 +643,6 @@ export class Arena {
           (trail.material as T.Material).dispose();
           this.trailMeshes.delete(id);
         }
-        this.trails.delete(id);
       }
     this.paddle.position.x = this.game.paddle;
     this.paddle.scale.x = this.game.width / 3;
@@ -660,14 +673,27 @@ export class Arena {
           : 0xa8e0e8,
     );
   }
+  private powerLabel(kind: Power) {
+    let material = this.labels.get(kind);
+    if (material) return material;
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#092e3b';
+    context.font = 'bold 48px sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(POWER[kind].glyph, 32, 34);
+    const texture = new T.CanvasTexture(canvas);
+    this.textures.push(texture);
+    material = new T.MeshBasicMaterial({ map: texture, transparent: true });
+    this.labels.set(kind, material);
+    this.sharedMat.add(material);
+    return material;
+  }
   private effect(e: FX) {
-    const count = this.reduced
-      ? 3
-      : e.kind === 'brick'
-        ? 14
-        : e.kind === 'drone'
-          ? 24
-          : 6;
+    const count = fragmentBudget(e.kind, this.reduced, this.particles.length);
     if (e.kind === 'pulse') {
       const m = new T.Mesh(
         new T.RingGeometry(0.92, 1, 96),
@@ -698,7 +724,6 @@ export class Arena {
       e.kind === 'power' ? 0.35 : 0.1,
       e.kind === 'drone' ? 'triangle' : 'sine',
     );
-    if (this.particles.length > 250) return;
     for (let i = 0; i < count; i++) {
       const mat = new T.MeshPhysicalMaterial({
         color: e.color,
@@ -727,7 +752,7 @@ export class Arena {
     if (this.gone) return;
     this.raf = requestAnimationFrame(this.draw);
     const rawDt = this.last ? (now - this.last) / 1000 : 0.016;
-    const dt = Math.min(rawDt, 0.05);
+    const dt = Math.min(rawDt, 0.1);
     this.last = now;
     this.clock += dt;
     if (this.game.mode !== 'paused') {
@@ -736,9 +761,10 @@ export class Arena {
       if (this.keys.has('arrowright') || this.keys.has('d'))
         this.game.target += dt * 17;
       this.game.target = T.MathUtils.clamp(this.game.target, -6.5, 6.5);
-      this.game.step(dt);
+      this.game.advance(dt);
       for (const e of this.game.events.splice(0)) this.effect(e);
       this.sync();
+      let survivingParticles = 0;
       for (const p of this.particles) {
         p.life -= dt;
         p.mesh.position.x += p.vx * dt;
@@ -750,9 +776,11 @@ export class Arena {
         if (p.life <= 0) {
           this.world.remove(p.mesh);
           (p.mesh.material as T.Material).dispose();
-          this.particles = this.particles.filter((o) => o !== p);
+        } else {
+          this.particles[survivingParticles++] = p;
         }
       }
+      this.particles.length = survivingParticles;
       for (const r of this.rings) {
         r.life -= dt;
         r.mesh.scale.setScalar(1 + (1 - r.life / r.max) * 22);
@@ -819,6 +847,20 @@ export class Arena {
     this.trimGeo.dispose();
     this.fragmentGeo.dispose();
     this.ballGeo.dispose();
+    for (const geometry of [
+      this.shotGeo,
+      this.dropGeo,
+      this.labelGeo,
+      this.markerGeo,
+    ])
+      geometry.dispose();
+    for (const material of [
+      this.cacheMark,
+      this.growthMark,
+      this.growthGhost,
+      ...this.labels.values(),
+    ])
+      material.dispose();
     this.composer.passes.forEach((p) => p.dispose());
     this.composer.dispose();
     this.renderer.dispose();

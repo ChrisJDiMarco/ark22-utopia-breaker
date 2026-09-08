@@ -36,11 +36,15 @@ const INITIAL: Snapshot = {
   powers: [],
   shield: 0,
   captured: false,
+  stranded: false,
+  tetherReady: false,
   boss: 0,
   bossMax: 0,
   bossWarning: false,
   jam: 0,
-  supply: 'shield',
+  supply: 'save',
+  credits: 0,
+  growing: 0,
 };
 export default function Home() {
   const host = useRef<HTMLDivElement>(null),
@@ -212,7 +216,11 @@ export default function Home() {
             <small>GRID</small>
             <strong>
               {state.remaining}
-              <em> / {state.total}</em>
+              <em>
+                {' '}
+                / {state.total}
+                {state.growing > 0 ? ` · ${state.growing} regrowing` : ''}
+              </em>
             </strong>
           </div>
         )}
@@ -236,7 +244,9 @@ export default function Home() {
           >
             <b>{POWER[p.kind].glyph}</b>
             <span>{POWER[p.kind].label}</span>
-            <time>{p.seconds}s</time>
+            <time>
+              {p.kind === 'laser' ? `${p.charges} bursts` : `${p.seconds}s`}
+            </time>
           </div>
         ))}
         {state.shield > 0 && (
@@ -318,18 +328,25 @@ export default function Home() {
           </p>
           {state.mode === 'clear' && (
             <fieldset className="supply-options">
-              <legend>Choose your next-sector supply</legend>
+              <legend>{state.credits} salvage · choose a supply or save</legend>
               {SUPPLIES.map((supply) => (
                 <button
                   key={supply.kind}
                   type="button"
                   aria-pressed={state.supply === supply.kind}
+                  disabled={
+                    state.credits < supply.cost ||
+                    (supply.kind === 'repair' && state.lives >= 5)
+                  }
                   onClick={() => {
                     game.current?.game.chooseSupply(supply.kind);
                     host.current?.querySelector('canvas')?.focus();
                   }}
                 >
-                  <b>{supply.title}</b>
+                  <b>
+                    {supply.title}
+                    {supply.cost > 0 ? ` · ${supply.cost} salvage` : ''}
+                  </b>
                   <span>{supply.detail}</span>
                 </button>
               ))}
@@ -401,6 +418,20 @@ export default function Home() {
           <button onClick={() => window.location.reload()}>Reload arena</button>
         </div>
       )}
+      {!overlay && state.stranded && (
+        <button
+          className="launch-button"
+          disabled={!state.tetherReady}
+          onClick={action}
+        >
+          {state.tetherReady
+            ? 'Reclaim ball · 35 charge'
+            : state.energy < 35
+              ? 'Tether needs 35 charge'
+              : 'Align paddle under raider'}{' '}
+          <kbd>SPACE</kbd>
+        </button>
+      )}
       {!overlay && state.mode === 'ready' && (
         <button className="launch-button" onClick={action}>
           <Play size={14} /> Launch ball <kbd>SPACE</kbd>
@@ -447,15 +478,18 @@ export default function Home() {
             </p>
             <p>
               <b>Rescue pulse · E</b> At 100% charge, clear raiders, recover
-              stolen cargo, and save low balls. Bricks and time recharge it.
+              stolen cargo, and save low balls. Fresh bricks and time recharge
+              it; pulse kills do not refund charge.
             </p>
             <p>
               <b>Raiders</b> Pink drones steal descending balls and capsules.
-              Hit them with a ball or laser, or pulse before they escape.
+              Hit them with a ball or laser, or pulse before they escape. If
+              your last ball is captured, align your paddle beneath its raider
+              and press Space to reclaim it for 35 charge.
             </p>
             <p>
-              <b>Sentinels</b> Violet armor takes two hits. Their rings show
-              when the armor breaks.
+              <b>Sentinels</b> Violet armor takes two hits, or three in late
+              sectors. Their rings show when the armor breaks.
             </p>
             <p>
               <b>Bombers & guardians</b> Amber warnings mean an aimed volley is
@@ -464,14 +498,29 @@ export default function Home() {
               without directly costing hull.
             </p>
             <p>
-              <b>New specials</b> Prism pierce passes through bricks, cryo field
-              freezes enemies and bombs, and capsule magnet pulls drops toward
-              your paddle.
+              <b>Rare caches</b> Gold-ringed bricks contain specials: three
+              caches per sector, four in the final chapter. Earned capsules
+              arrive one at a time. Keep the ball alive while you move to catch
+              them.
             </p>
             <p>
-              <b>Supplies & checkpoints</b> Choose shields, hull repair, or a
-              powered launch between sectors. Clearing sectors 4 and 8 unlocks a
-              fresh flight from the next sector on this device.
+              <b>Weapons</b> Twin laser provides six bursts. Prism pierce cuts
+              through three bricks per paddle return and seals green cores.
+              These two weapons replace each other. Multiball is capped at three
+              balls early, four mid-campaign, and five late.
+            </p>
+            <p>
+              <b>Regrowth</b> Green-ringed bricks start rebuilding when broken:
+              once in early sectors, twice late. Pierce seals them permanently;
+              cryo pauses rebuilding. Clear the live grid and guardian to cancel
+              every pending regrowth. Rebuilt bricks cannot generate more
+              specials.
+            </p>
+            <p>
+              <b>Supplies & checkpoints</b> Each cleared sector earns one
+              salvage. Save it or spend it on a shield (one), hull repair (two),
+              or a short powered launch (two). Clearing sectors 4 and 8 unlocks
+              the next chapter on this device.
             </p>
             <p>
               <b>Pause · P</b> Switching tabs also pauses your flight.

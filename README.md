@@ -6,17 +6,21 @@ A real-time Three.js brick-breaker in a sunlit glass atrium. Built with GPT Site
 
 Move the paddle with mouse, touch drag, arrows, or A/D. Click or Space launches. E spends a charged rescue pulse. P pauses. The game also pauses when the window loses focus.
 
-Restore twelve distinct sectors and defeat guardians in sectors 4, 8, and 12. Raiders steal descending balls and falling capsules; hit a carrier with another ball or a laser, or use pulse to recover its cargo. Armored violet sentinels take two hits. Amber bombers warn and lock their aim before firing; their bombs briefly narrow your paddle and drain charge, and can be intercepted with balls, lasers, or pulse.
+Restore twelve distinct sectors and defeat guardians in sectors 4, 8, and 12. Raiders steal descending balls and falling capsules; hit a carrier with another ball or a laser, or use pulse to recover its cargo. If all balls are captured, align the paddle underneath a carrier and press Space to reclaim one for 35 charge. Armored violet sentinels take two hits, rising to three in the final chapter. Amber bombers warn and lock their aim before firing; their bombs briefly narrow your paddle and drain charge, and can be intercepted with balls, lasers, or pulse.
 
-Ten pickups include multiball, twin lasers, wide paddle, slow time, magnet catch, floor shields, extra hull, prism pierce, cryo field, and capsule magnet. Pierce damages each brick once per passage; cryo freezes hostile clocks and bombs while balls stay live. Guardians fire wider volleys below half health.
+All ten pickups remain: multiball, twin lasers, wide paddle, slow time, magnet catch, floor shields, extra hull, prism pierce, cryo field, and capsule magnet. Specials come from three gold-ringed cache bricks per sector, four in the final chapter. Rewards queue and release one at a time with at least eight seconds between fresh drops; ordinary and rebuilt bricks do not generate drops. Multiball caps rise from three to four to five across the chapters. Lasers have six twin bursts; laser and pierce replace each other. Pierce cuts through three bricks per paddle return and permanently seals regenerative cores, including armored ones.
 
-Between sectors, choose two shields, a hull repair, or a powered launch. Clearing sectors 4 and 8 unlocks checkpoints at 5 and 9. Checkpoint flights begin with a fresh score and three lives; best score and unlocked checkpoints stay on the current device.
+Green-ringed bricks appear from sector 3. They rebuild once, or twice in the final chapter, with a visible wireframe warning. Regrowth waits for balls to leave the slot and stops while cryo is active. Clearing the live grid and guardian cancels all pending growth. Rebuilt bricks award only 25 points and no new supplies or pulse charge. Ball speed and armor continue increasing through the campaign, with a calmer early enemy cadence.
+
+Each cleared sector awards one salvage. Bank it or buy one shield (one salvage), one hull repair (two), or a short laser/wide-paddle launch (two). Clearing sectors 4 and 8 unlocks checkpoints at 5 and 9. Checkpoint flights begin with a fresh score, zero salvage, and three lives; best score and unlocked checkpoints stay on the current device.
 
 ## Development
 
-`npm install`, `npm run dev`, `npm test`, `node tests/projection.test.mjs`, `node tests/campaign.test.cjs`, `npm run build`.
+`npm install`, `npm run dev`, `npm test`, `node tests/projection.test.mjs`, `node tests/effects.test.mjs`, `node tests/campaign.test.cjs`, `npm run build`.
 
 Game simulation is in `app/game/model.ts`, campaign patterns in `campaign.ts`, enemy behavior in `encounters.ts`, rendering in `arena.ts` and `encounter-visuals.ts`, and the React HUD in `app/page.tsx`. Tests cover collisions, power-ups, pause, captures, rescue, escape, armor, warnings, freeze, supplies, and campaign progression. The seeded campaign test plays through real physics with an automated paddle; it verifies reachability and state invariants, not human difficulty or rendering performance. Projection tests protect the approved board framing and pointer alignment.
+
+Rendering reuses ball-trail buffers, capsule/laser geometry and glyph materials, limits live fragments to 90, and compacts debris once per frame. Simulation processes short frame dips in bounded slices instead of discarding elapsed time below 20fps. Tests verify buffer reuse and equal elapsed simulation time at 60, 15, and 10fps; these are not GPU frame-rate measurements.
 
 ## Sources and original assets
 

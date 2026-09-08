@@ -17,7 +17,7 @@ fs.writeFileSync(
     },
   }).outputText,
 );
-for (const name of ['campaign', 'encounters']) {
+for (const name of ['campaign', 'encounters', 'rewards']) {
   const helper = path.resolve(__dirname, `../app/game/${name}.ts`);
   if (fs.existsSync(helper))
     fs.writeFileSync(
@@ -151,10 +151,10 @@ test('magnet held ball remains launchable after timer expires', () => {
   g.action();
   assert(!g.balls[0].held);
 });
-test('multiball limits to seven balls', () => {
+test('multiball has a readable early-sector cap', () => {
   const g = play();
   for (let i = 0; i < 10; i++) g.collect('multi');
-  assert.equal(g.balls.length, 7);
+  assert.equal(g.balls.length, 3);
 });
 test('twelve sector completion transitions reach victory', () => {
   const g = play();
@@ -293,6 +293,7 @@ test('supply applies after reset, only once, and remains until launch', () => {
   g.bricks = [];
   g.boss = 0;
   g.step(0.01);
+  g.credits = 2;
   g.chooseSupply('arsenal');
   g.action();
   assert.equal(g.mode, 'ready');
@@ -336,6 +337,226 @@ test('restart clears hazards and supports campaign checkpoint starts', () => {
   assert.equal(g.bombs.length, 0);
   assert.equal(g.jam, 0);
   assert.equal(g.mode, 'ready');
+});
+test('regular bricks never feed a cascade of special drops', () => {
+  const g = play();
+  for (const brick of [...g.bricks]) if (!brick.cache) g.hitBrick(brick);
+  assert.equal(g.drops.length, 0);
+  assert.equal(g.pendingDrops.length, 0);
+});
+test('cache rewards are scarce, queued and released one at a time', () => {
+  const g = play(),
+    caches = g.bricks.filter((b) => b.cache);
+  assert.equal(caches.length, 3);
+  for (const brick of caches) {
+    while (g.bricks.includes(brick)) g.hitBrick(brick);
+  }
+  assert.equal(g.drops.length, 1);
+  assert.equal(g.pendingDrops.length, 2);
+  g.drops = [];
+  advance(g, 2);
+  assert.equal(g.drops.length, 0);
+  advance(g, 7);
+  assert.equal(g.drops.length, 1);
+});
+test('all ten specials remain represented across the campaign', () => {
+  const g = ready(),
+    found = new Set();
+  for (let level = 0; level < 12; level++) {
+    g.level = level;
+    g.loadLevel();
+    for (const b of g.bricks) if (b.cache) found.add(b.cache);
+  }
+  assert.equal(found.size, 10);
+});
+test('laser is limited to six twin bursts and cannot stack with pierce', () => {
+  const g = play();
+  g.collect('laser');
+  g.bricks = [
+    { id: g.id(), x: 7, z: -9, hp: 999, max: 999, row: 0, burst: false },
+  ];
+  let fired = 0,
+    seen = new Set();
+  for (let n = 0; n < 300; n++) {
+    g.step(0.02);
+    for (const shot of g.shots) seen.add(shot.id);
+    g.events = [];
+  }
+  fired = seen.size;
+  assert.equal(fired, 12);
+  assert.equal(g.laserAmmo, 0);
+  assert(!g.powers.laser);
+  g.collect('laser');
+  g.collect('pierce');
+  assert(!g.powers.laser);
+  g.collect('laser');
+  assert(!g.powers.pierce);
+});
+test('regrowth is finite and cannot farm score or more supplies', () => {
+  const g = play();
+  g.level = 2;
+  g.loadLevel();
+  g.action();
+  g.spawnIn = 1e8;
+  const brick = g.bricks.find((b) => b.regen > 0);
+  assert(brick);
+  const original = { ...brick };
+  while (g.bricks.includes(brick)) g.hitBrick(brick);
+  assert.equal(g.regrowth.length, 1);
+  Object.assign(g.balls[0], { held: true });
+  advance(g, 14);
+  const restored = g.bricks.find(
+    (b) => b.x === original.x && b.z === original.z,
+  );
+  assert(restored);
+  assert.equal(restored.regen, 0);
+  assert(!restored.cache);
+  const score = g.score;
+  g.hitBrick(restored);
+  assert.equal(g.score - score, 25);
+  assert.equal(g.regrowth.length, 0);
+});
+test('pierce seals regenerative bricks and cryo pauses pending growth', () => {
+  const g = play();
+  g.level = 2;
+  g.loadLevel();
+  g.action();
+  const cores = g.bricks.filter((b) => b.regen > 0);
+  const sealed = cores[0];
+  while (g.bricks.includes(sealed)) g.hitBrick(sealed, false, true);
+  assert.equal(g.regrowth.length, 0);
+  const growing = cores[1];
+  while (g.bricks.includes(growing)) g.hitBrick(growing);
+  const wait = g.regrowth[0].wait;
+  g.collect('freeze');
+  advance(g, 0.2);
+  assert.equal(g.regrowth[0].wait, wait);
+});
+test('growth waits for a ball to leave its slot and never blocks a clean finish', () => {
+  const g = play();
+  g.level = 2;
+  g.loadLevel();
+  g.action();
+  const core = g.bricks.find((b) => b.regen > 0);
+  while (g.bricks.includes(core)) g.hitBrick(core);
+  g.regrowth[0].wait = 0;
+  Object.assign(g.balls[0], { x: core.x, z: core.z, vx: 0, vz: 10 });
+  g.step(0.005);
+  assert.equal(g.regrowth.length, 1);
+  g.bricks = [];
+  g.boss = 0;
+  g.step(0.005);
+  assert.equal(g.mode, 'clear');
+  assert.equal(g.regrowth.length, 0);
+});
+test('supply purchases require saved credits and spend them exactly once', () => {
+  const g = play();
+  g.bricks = [];
+  g.boss = 0;
+  g.step(0.01);
+  assert.equal(g.credits, 1);
+  g.chooseSupply('repair');
+  assert.equal(g.supply, 'save');
+  g.chooseSupply('shield');
+  g.action();
+  assert.equal(g.shield, 1);
+  assert.equal(g.credits, 0);
+  g.action();
+  assert.equal(g.credits, 0);
+});
+test('difficulty keeps increasing beyond sector eight', () => {
+  const g = ready();
+  let prior = 0,
+    armor = 0;
+  for (let level = 0; level < 12; level++) {
+    g.level = level;
+    g.loadLevel();
+    assert(g.speed > prior);
+    prior = g.speed;
+    if (level === 11)
+      armor = g.bricks.filter((b) => b.hp > 1).length / g.bricks.length;
+  }
+  assert(armor > 0.35);
+});
+test('frame catch-up keeps game time consistent at 60, 15 and 10fps', () => {
+  const times = [];
+  for (const fps of [60, 15, 10]) {
+    const g = play();
+    g.balls[0].held = true;
+    for (let i = 0; i < fps * 2; i++) g.advance(1 / fps);
+    times.push(g.time);
+  }
+  for (const t of times) assert(Math.abs(t - 2) < 1e-9);
+});
+test('one piercing hit permanently seals armor before a later ordinary finish', () => {
+  const g = play();
+  const br = {
+    id: g.id(),
+    x: 0,
+    z: 0,
+    hp: 2,
+    max: 2,
+    row: 0,
+    burst: false,
+    regen: 2,
+  };
+  g.bricks.push(br);
+  g.hitBrick(br, false, true);
+  assert.equal(br.regen, 0);
+  g.hitBrick(br);
+  assert.equal(g.regrowth.length, 0);
+});
+test('last-ball tether requires aim and charge and cannot create a free rescue', () => {
+  const g = play(),
+    b = g.balls[0],
+    d = drone(g, { x: 4, z: 0, ball: g.balls[0].id });
+  b.captor = d.id;
+  g.energy = 60;
+  g.paddle = 0;
+  g.action();
+  assert.equal(b.captor, d.id);
+  assert.equal(g.energy, 60);
+  g.paddle = 4;
+  g.energy = 34;
+  g.action();
+  assert.equal(b.captor, d.id);
+  g.energy = 60;
+  g.action();
+  assert.equal(b.captor, null);
+  assert.equal(g.energy, 25);
+  assert.equal(g.drones.length, 0);
+  assert(b.safe >= 3);
+});
+test('pierce cuts only three bricks until the ball returns to the paddle', () => {
+  const g = play();
+  g.bricks = [];
+  for (let i = 0; i < 4; i++)
+    g.bricks.push({
+      id: g.id(),
+      x: 0,
+      z: -i * 1.1,
+      hp: 1,
+      max: 1,
+      row: 0,
+      burst: false,
+      regen: 1,
+    });
+  g.bricks.push({
+    id: g.id(),
+    x: 7,
+    z: -9,
+    hp: 1,
+    max: 1,
+    row: 0,
+    burst: false,
+  });
+  const b = g.balls[0];
+  Object.assign(b, { x: 0, z: 0.7, vx: 0, vz: -10 });
+  g.collect('pierce');
+  advance(g, 0.5);
+  assert.equal(b.pierceHits, 3);
+  assert.equal(g.regrowth.length, 1);
+  assert(b.vz > 0);
 });
 const output = {
   sha256: crypto.createHash('sha256').update(source).digest('hex'),

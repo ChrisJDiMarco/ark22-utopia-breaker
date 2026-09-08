@@ -10,7 +10,7 @@ export function spawnEnemy(g: Game) {
     x: (g.random() - 0.5) * 12,
     z: -9.7,
     age: 0,
-    hp: ENEMIES[kind].hp,
+    hp: ENEMIES[kind].hp + (kind === 'sentinel' && g.level >= 8 ? 1 : 0),
     ball: null,
     cargo: null,
     escape: 0,
@@ -67,9 +67,9 @@ export function stepEnemies(g: Game, dt: number) {
     g.spawnIn -= dt;
     if (
       g.spawnIn <= 0 &&
-      g.drones.length < Math.min(4, 2 + Math.floor(g.level / 4))
+      g.drones.length < (g.level < 3 ? 1 : g.level < 8 ? 2 : 3)
     ) {
-      g.spawnIn = Math.max(5, 11 - g.level * 0.5);
+      g.spawnIn = Math.max(9, 18 - g.level * 0.8);
       spawnEnemy(g);
     }
     if (g.boss > 0) {
@@ -143,7 +143,10 @@ export function stepEnemies(g: Game, dt: number) {
       ) {
         b.captor = d.id;
         d.ball = b.id;
-        g.say('BALL CAPTURED · press E to rescue', 5);
+        g.say(
+          'BALL CAPTURED · align below + Space (35 charge), or E to pulse',
+          5,
+        );
       } else {
         if (!g.powers.pierce) b.vz = -b.vz;
         b.safe = 0.3;

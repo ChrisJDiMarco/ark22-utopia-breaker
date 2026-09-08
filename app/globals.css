@@ -786,3 +786,5 @@ kbd {
   }
 }
 .arena-backdrop{position:absolute;inset:0;background:url('/textures/arena-clean-plate.png') center / 100% 100% no-repeat;pointer-events:none}
+
+.supply-options button:disabled { opacity: .45; cursor: not-allowed; }

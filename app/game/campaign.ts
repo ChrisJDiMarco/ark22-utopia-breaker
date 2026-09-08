@@ -1,20 +1,34 @@
 export type EnemyKind = 'thief' | 'sentinel' | 'bomber';
-export type Supply = 'shield' | 'repair' | 'arsenal';
-export const SUPPLIES: { kind: Supply; title: string; detail: string }[] = [
+export type Supply = 'save' | 'shield' | 'repair' | 'arsenal';
+export const SUPPLIES: {
+  kind: Supply;
+  title: string;
+  detail: string;
+  cost: number;
+}[] = [
+  {
+    kind: 'save',
+    title: 'Save salvage',
+    detail: 'Bank this sector’s salvage for a later upgrade.',
+    cost: 0,
+  },
   {
     kind: 'shield',
     title: 'Safety net',
-    detail: 'Two floor shields for the next sector.',
+    detail: 'One floor shield for the next sector.',
+    cost: 1,
   },
   {
     kind: 'repair',
     title: 'Hull repair',
-    detail: 'Recover one life. Full hull earns 1,500 points.',
+    detail: 'Recover one life. Available when your hull is damaged.',
+    cost: 2,
   },
   {
     kind: 'arsenal',
     title: 'Hot start',
-    detail: 'Launch with twin lasers and a wide paddle.',
+    detail: 'Three twin-laser bursts and eight seconds of wide paddle.',
+    cost: 2,
   },
 ];
 export const ENEMIES = {
@@ -32,7 +46,7 @@ type Sector = {
 export const CAMPAIGN: Sector[] = [
   {
     name: 'The glass garden',
-    hint: 'Build your combo. Pink raiders steal balls and capsules.',
+    hint: 'Aim for gold cache bricks to earn rare specials. Pink raiders steal them.',
     enemies: ['thief'],
     pattern: () => true,
   },
@@ -44,7 +58,7 @@ export const CAMPAIGN: Sector[] = [
   },
   {
     name: 'Orbital bloom',
-    hint: 'Amber bombers lock their aim before firing. Keep moving.',
+    hint: 'Green cores regrow once. Pierce seals them; finish the grid before they return.',
     enemies: ['bomber', 'thief'],
     pattern: (r, c) => Math.abs(c - 5) <= r + 2,
   },
@@ -91,7 +105,7 @@ export const CAMPAIGN: Sector[] = [
   },
   {
     name: 'Aurora vault',
-    hint: 'Three-hit vault plates protect a chain-reactive core.',
+    hint: 'Three-hit vault armor and two-cycle regrowth. Save piercing shots for green cores.',
     enemies: ['sentinel', 'bomber', 'thief'],
     pattern: (r, c) =>
       r === 0 ||

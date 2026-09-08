@@ -4,7 +4,7 @@ const path = require('node:path');
 const os = require('node:os');
 const ts = require('typescript');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ark22-campaign-'));
-for (const name of ['model', 'campaign', 'encounters']) {
+for (const name of ['model', 'campaign', 'encounters', 'rewards']) {
   const source = fs.readFileSync(
     path.resolve(__dirname, `../app/game/${name}.ts`),
     'utf8',
@@ -60,10 +60,17 @@ for (let run = 0; run < 6; run++) {
           aim = aim > 7.8 ? 15.6 - aim : -15.6 - aim;
       }
       g.target = aim + Math.sin(g.time * 0.55) * 0.65;
+      const drop = g.drops.find((d) => d.z > 3.5 && d.z < 8.5);
+      if (drop && ball.vz < 0 && ball.z < 5) g.target = drop.x;
+      if (ball.z > 9 && ball.vz > 0 && g.energy >= 100) g.pulse();
     }
     if (g.balls.some((b) => b.captor !== null)) {
       captures++;
-      if (g.energy >= 100) g.pulse();
+      if (g.stranded) {
+        const carrier = g.drones.find((d) => d.ball !== null);
+        if (carrier) g.target = carrier.x;
+        if (g.tetherTarget && g.energy >= 35) g.action();
+      } else if (g.energy >= 100) g.pulse();
     }
     const prevLives = g.lives;
     g.step(1 / 60);

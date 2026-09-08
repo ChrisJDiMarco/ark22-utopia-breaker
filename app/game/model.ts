@@ -1,5 +1,17 @@
-import { CAMPAIGN, ENEMIES, type EnemyKind, type Supply } from './campaign';
+import {
+  CAMPAIGN,
+  ENEMIES,
+  SUPPLIES,
+  type EnemyKind,
+  type Supply,
+} from './campaign';
 import { stepEnemies } from './encounters';
+import {
+  prepareCaches,
+  brickReward,
+  stepRewards,
+  type Regrowth,
+} from './rewards';
 export { SECTORS } from './campaign';
 export type Mode =
   | 'menu'
@@ -25,19 +37,19 @@ export const POWER: Record<
   { label: string; glyph: string; color: number; duration: number }
 > = {
   multi: { label: 'Multiball', glyph: 'M', color: 0x34e0e9, duration: 0 },
-  laser: { label: 'Twin laser', glyph: 'L', color: 0xff718c, duration: 18 },
-  wide: { label: 'Wide paddle', glyph: 'W', color: 0x4fdfa8, duration: 20 },
-  slow: { label: 'Slow time', glyph: 'S', color: 0x82a7ff, duration: 14 },
-  catch: { label: 'Magnet catch', glyph: 'C', color: 0xe6bd68, duration: 16 },
+  laser: { label: 'Twin laser', glyph: 'L', color: 0xff718c, duration: 10 },
+  wide: { label: 'Wide paddle', glyph: 'W', color: 0x4fdfa8, duration: 12 },
+  slow: { label: 'Slow time', glyph: 'S', color: 0x82a7ff, duration: 7 },
+  catch: { label: 'Magnet catch', glyph: 'C', color: 0xe6bd68, duration: 9 },
   shield: { label: 'Floor shield', glyph: 'H', color: 0x74dff3, duration: 0 },
   life: { label: 'Extra hull', glyph: '+', color: 0xffb6da, duration: 0 },
-  pierce: { label: 'Prism pierce', glyph: 'P', color: 0xffa85b, duration: 12 },
-  freeze: { label: 'Cryo field', glyph: 'F', color: 0x9feaff, duration: 8 },
+  pierce: { label: 'Prism pierce', glyph: 'P', color: 0xffa85b, duration: 6 },
+  freeze: { label: 'Cryo field', glyph: 'F', color: 0x9feaff, duration: 4 },
   magnet: {
     label: 'Capsule magnet',
     glyph: 'A',
     color: 0xd6a4ff,
-    duration: 18,
+    duration: 10,
   },
 };
 export type Ball = {
@@ -50,6 +62,7 @@ export type Ball = {
   captor: number | null;
   safe: number;
   contacts: Set<number>;
+  pierceHits: number;
 };
 export type Brick = {
   id: number;
@@ -59,6 +72,9 @@ export type Brick = {
   max: number;
   row: number;
   burst: boolean;
+  cache?: Power;
+  regen?: number;
+  grown?: boolean;
 };
 export type Drop = { id: number; x: number; z: number; kind: Power };
 export type Drone = {
@@ -102,14 +118,18 @@ export type Snapshot = {
   remaining: number;
   total: number;
   notice: string;
-  powers: { kind: Power; seconds: number }[];
+  powers: { kind: Power; seconds: number; charges?: number }[];
   shield: number;
   captured: boolean;
+  stranded: boolean;
+  tetherReady: boolean;
   boss: number;
   bossMax: number;
   bossWarning: boolean;
   jam: number;
   supply: Supply;
+  credits: number;
+  growing: number;
 };
 export const clamp = (n: number, lo: number, hi: number) =>
   Math.max(lo, Math.min(hi, n));
@@ -139,7 +159,12 @@ export class Game {
   enemyTime = 0;
   wave = 0;
   jam = 0;
-  supply: Supply = 'shield';
+  supply: Supply = 'save';
+  credits = 0;
+  laserAmmo = 0;
+  nextDropAt = 0;
+  pendingDrops: Omit<Drop, 'id'>[] = [];
+  regrowth: Regrowth[] = [];
   bombs: Bomb[] = [];
   balls: Ball[] = [];
   bricks: Brick[] = [];
@@ -153,17 +178,19 @@ export class Game {
   private fireIn = 0;
   private broken = 0;
   private total = 0;
-  private sequence = 0;
   constructor(public random: () => number = Math.random) {
     this.loadLevel();
   }
   get width() {
-    return (this.powers.wide ? 7 : 5.4) * (this.jam > 0 ? 0.72 : 1);
+    return (
+      (5.4 - this.level * 0.075 + (this.powers.wide ? 1.2 : 0)) *
+      (this.jam > 0 ? 0.72 : 1)
+    );
   }
   get speed() {
     return (
-      (9.4 + Math.min(this.level, 7) * 0.6 + Math.min(this.broken * 0.028, 2)) *
-      (this.powers.slow ? 0.68 : 1)
+      (9.4 + this.level * 0.75 + Math.min(this.broken * 0.022, 1.8)) *
+      (this.powers.slow ? 0.82 : 1)
     );
   }
   id() {
@@ -179,7 +206,7 @@ export class Game {
     this.lives = 3;
     this.energy = 100;
     this.time = 0;
-    this.sequence = 0;
+    this.credits = 0;
     this.loadLevel();
     this.mode = 'ready';
     this.say(CAMPAIGN[this.level].hint, 8);
@@ -194,14 +221,18 @@ export class Game {
     this.jam = 0;
     this.enemyTime = 0;
     this.wave = 0;
-    this.supply = 'shield';
+    this.supply = 'save';
+    this.laserAmmo = 0;
+    this.pendingDrops = [];
+    this.nextDropAt = this.time;
+    this.regrowth = [];
     this.bossFireIn = 6;
     this.bossAim = 0;
     this.bossX = 0;
     this.powers = {};
     this.combo = 0;
     this.shield = 0;
-    this.spawnIn = 8;
+    this.spawnIn = Math.max(9, 18 - this.level * 0.8);
     this.fireIn = 0;
     this.broken = 0;
     this.paddle = 0;
@@ -214,7 +245,10 @@ export class Game {
         const hp =
           this.level === 9 && (r === 0 || r === 8 || c === 0 || c === 10)
             ? 3
-            : this.level > 0 && (r + c + this.level) % 5 === 0
+            : this.level > 0 &&
+                (r + c + this.level) %
+                  (this.level >= 8 ? 2 : this.level >= 4 ? 3 : 5) ===
+                  0
               ? 2
               : 1;
         this.bricks.push({
@@ -228,11 +262,13 @@ export class Game {
             this.level > 1 && (r * 11 + c) % (this.level === 6 ? 5 : 13) === 0,
         });
       }
+    prepareCaches(this);
     this.total = this.bricks.length;
     this.addBall(0, 7.85, true);
   }
   addBall(x: number, z: number, held = false, angle = 0) {
-    if (this.balls.length >= 7) return;
+    if (this.balls.length >= (this.level < 4 ? 3 : this.level < 8 ? 4 : 5))
+      return;
     const v = rebound(angle, this.speed);
     this.balls.push({
       id: this.id(),
@@ -243,6 +279,7 @@ export class Game {
       captor: null,
       safe: 1.5,
       contacts: new Set(),
+      pierceHits: 0,
     });
   }
   action() {
@@ -255,17 +292,20 @@ export class Game {
       return;
     }
     if (this.mode === 'clear') {
-      const reward = this.supply;
+      const reward = SUPPLIES.find((s) => s.kind === this.supply)!;
+      const purchase =
+        this.credits >= reward.cost &&
+        (reward.kind !== 'repair' || this.lives < 5);
+      if (purchase) this.credits -= reward.cost;
       this.level++;
       this.loadLevel();
-      this.energy = 100;
-      if (reward === 'shield') this.shield = 2;
-      else if (reward === 'repair') {
-        if (this.lives < 5) this.lives++;
-        else this.score += 1500;
-      } else {
-        this.powers.laser = 18;
-        this.powers.wide = 20;
+      this.energy = Math.max(40, this.energy);
+      if (purchase && reward.kind === 'shield') this.shield = 1;
+      else if (purchase && reward.kind === 'repair') this.lives++;
+      else if (purchase && reward.kind === 'arsenal') {
+        this.powers.laser = 6;
+        this.laserAmmo = 3;
+        this.powers.wide = 8;
       }
       this.mode = 'ready';
       this.say(CAMPAIGN[this.level].hint, 8);
@@ -277,6 +317,10 @@ export class Game {
     }
     if (this.mode === 'ready' || this.mode === 'playing') {
       this.mode = 'playing';
+      if (this.stranded) {
+        this.reclaim();
+        return;
+      }
       this.notice = '';
       for (const b of this.balls)
         if (b.held) {
@@ -288,10 +332,35 @@ export class Game {
       if (this.powers.laser) this.fire();
     }
   }
+  get stranded() {
+    return this.balls.length > 0 && this.balls.every((b) => b.captor !== null);
+  }
+  get tetherTarget() {
+    return this.drones.find(
+      (d) => d.ball !== null && Math.abs(d.x - this.paddle) <= 1.25,
+    );
+  }
+  reclaim() {
+    if (this.mode !== 'playing' || !this.stranded) return;
+    const carrier = this.tetherTarget;
+    if (!carrier || this.energy < 35) {
+      this.say(
+        'Align under the raider · Space reclaims your ball for 35 charge',
+        4,
+      );
+      return;
+    }
+    this.energy -= 35;
+    this.destroyDrone(carrier, false);
+    this.say('Ball reclaimed · keep it alive');
+  }
   chooseSupply(supply: Supply) {
+    const option = SUPPLIES.find((s) => s.kind === supply);
     if (
       this.mode === 'clear' &&
-      ['shield', 'repair', 'arsenal'].includes(supply)
+      option &&
+      this.credits >= option.cost &&
+      (supply !== 'repair' || this.lives < 5)
     )
       this.supply = supply;
   }
@@ -306,8 +375,16 @@ export class Game {
     }
   }
   fire() {
-    if (this.fireIn > 0) return;
-    this.fireIn = 0.28;
+    if (
+      this.mode !== 'playing' ||
+      !this.powers.laser ||
+      this.fireIn > 0 ||
+      this.laserAmmo <= 0
+    )
+      return;
+    this.fireIn = 0.8;
+    this.laserAmmo--;
+    if (this.laserAmmo === 0) delete this.powers.laser;
     for (const x of [-this.width * 0.38, this.width * 0.38])
       this.shots.push({ id: this.id(), x: this.paddle + x, z: 8.1 });
   }
@@ -322,7 +399,7 @@ export class Game {
       z: 8.5,
       color: 0x67eafa,
     });
-    for (const d of this.drones) this.destroyDrone(d);
+    for (const d of this.drones) this.destroyDrone(d, false);
     for (const b of this.balls) {
       if (!b.held && b.z > 3 && b.vz > 0) b.vz = -Math.abs(b.vz);
       b.safe = 3;
@@ -349,7 +426,18 @@ export class Game {
       }
     } else if (kind === 'shield') this.shield = Math.min(3, this.shield + 1);
     else if (kind === 'life') this.lives = Math.min(5, this.lives + 1);
-    else this.powers[kind] = POWER[kind].duration;
+    else {
+      if (kind === 'laser') {
+        delete this.powers.pierce;
+        this.laserAmmo = 6;
+      }
+      if (kind === 'pierce') {
+        delete this.powers.laser;
+        this.laserAmmo = 0;
+        for (const ball of this.balls) ball.pierceHits = 0;
+      }
+      this.powers[kind] = POWER[kind].duration;
+    }
   }
   hitDrone(d: Drone) {
     if (!this.drones.includes(d)) return;
@@ -365,7 +453,7 @@ export class Game {
       });
     }
   }
-  destroyDrone(d: Drone) {
+  destroyDrone(d: Drone, charge = true) {
     if (!this.drones.includes(d)) return;
     if (d.ball !== null) {
       const b = this.balls.find((b) => b.id === d.ball);
@@ -382,7 +470,7 @@ export class Game {
       this.drops.push({ id: this.id(), x: d.x, z: d.z, kind: d.cargo });
     this.drones = this.drones.filter((o) => o.id !== d.id);
     this.score += d.kind === 'sentinel' ? 400 : 250;
-    this.energy = clamp(this.energy + 12, 0, 100);
+    if (charge) this.energy = clamp(this.energy + 6, 0, 100);
     this.events.push({
       kind: 'drone',
       x: d.x,
@@ -390,8 +478,9 @@ export class Game {
       color: ENEMIES[d.kind].color,
     });
   }
-  hitBrick(br: Brick, chain = false) {
+  hitBrick(br: Brick, chain = false, sealed = false) {
     if (!this.bricks.includes(br)) return;
+    if (sealed) br.regen = 0;
     br.hp--;
     this.events.push({
       kind: br.hp > 0 ? 'hit' : 'brick',
@@ -406,33 +495,26 @@ export class Game {
       return;
     }
     this.bricks = this.bricks.filter((o) => o.id !== br.id);
-    this.broken++;
-    this.combo++;
-    this.score +=
-      100 * Math.min(8, Math.max(1, Math.floor(this.combo / 4) + 1));
-    this.energy = clamp(this.energy + 4, 0, 100);
-    if (this.broken % 4 === 0) {
-      const seq: Power[] = [
-        'multi',
-        'wide',
-        'laser',
-        'shield',
-        'slow',
-        'catch',
-        'pierce',
-        'freeze',
-        'magnet',
-        'multi',
-        'life',
-      ];
-      const kind = seq[this.sequence++ % seq.length];
-      this.drops.push({ id: this.id(), x: br.x, z: br.z, kind });
+    brickReward(this, br, sealed);
+    if (br.grown) this.score += 25;
+    else {
+      this.broken++;
+      this.combo++;
+      this.score +=
+        100 * Math.min(8, Math.max(1, Math.floor(this.combo / 4) + 1));
+      this.energy = clamp(this.energy + 1.5, 0, 100);
     }
     if (br.burst && !chain) {
       for (const other of this.bricks)
         if (Math.hypot(other.x - br.x, other.z - br.z) < 2.25)
           this.hitBrick(other, true);
     }
+  }
+  advance(elapsed: number) {
+    // Preserve real-time play through short frame dips; never catch up a long suspension.
+    const dt = clamp(elapsed, 0, 0.1),
+      count = Math.max(1, Math.ceil(dt / 0.025));
+    for (let i = 0; i < count; i++) this.step(dt / count);
   }
   step(dt: number) {
     dt = clamp(dt, 0, 0.05);
@@ -454,7 +536,7 @@ export class Game {
   private tick(dt: number) {
     this.time += dt;
     this.jam = Math.max(0, this.jam - dt);
-    this.energy = clamp(this.energy + dt * 1.15, 0, 100);
+    this.energy = clamp(this.energy + dt * 0.65, 0, 100);
     this.fireIn -= dt;
     for (const key of Object.keys(this.powers) as Power[]) {
       this.powers[key]! -= dt;
@@ -509,6 +591,7 @@ export class Game {
           rebound((b.x - this.paddle) / (this.width / 2), this.speed),
         );
         this.combo = 0;
+        b.pierceHits = 0;
         this.events.push({ kind: 'paddle', x: b.x, z: 8.4, color: 0x5ff2eb });
         if (this.powers.catch) b.held = true;
       }
@@ -533,9 +616,10 @@ export class Game {
           dz = b.z - br.z;
         if (Math.abs(dx) < 0.86 && Math.abs(dz) < 0.51) {
           if (b.contacts.has(br.id)) continue;
-          if (this.powers.pierce) {
+          if (this.powers.pierce && b.pierceHits < 3) {
             b.contacts.add(br.id);
-            this.hitBrick(br);
+            b.pierceHits++;
+            this.hitBrick(br, false, true);
             continue;
           }
           if (Math.abs(oldZ - br.z) >= 0.5) {
@@ -607,10 +691,13 @@ export class Game {
       } else if (drop.z > 11)
         this.drops = this.drops.filter((o) => o.id !== drop.id);
     }
+    stepRewards(this, dt);
     stepEnemies(this, dt);
     // A completed sector takes precedence over a simultaneous last-ball loss.
     if (this.bricks.length === 0 && this.boss === 0) {
       this.score += 1000 * (this.level + 1);
+      this.credits++;
+      this.regrowth = [];
       this.mode = this.level === CAMPAIGN.length - 1 ? 'victory' : 'clear';
       this.say('Sector clear');
       return;
@@ -619,6 +706,7 @@ export class Game {
       this.lives--;
       this.combo = 0;
       this.powers = {};
+      this.laserAmmo = 0;
       this.shots = [];
       this.drones = [];
       this.drops = [];
@@ -629,7 +717,7 @@ export class Game {
         this.mode = 'gameover';
       } else {
         this.mode = 'ready';
-        this.energy = Math.max(70, this.energy);
+        this.energy = Math.max(40, this.energy);
         this.addBall(this.paddle, 7.85, true);
         this.say('Hull lost · click or Space to relaunch', 8);
       }
@@ -659,14 +747,19 @@ export class Game {
       powers: (Object.keys(this.powers) as Power[]).map((kind) => ({
         kind,
         seconds: Math.ceil(this.powers[kind]!),
+        charges: kind === 'laser' ? this.laserAmmo : undefined,
       })),
       shield: this.shield,
       captured: this.balls.some((b) => b.captor !== null),
+      stranded: this.stranded,
+      tetherReady: this.stranded && this.energy >= 35 && !!this.tetherTarget,
       boss: this.boss,
       bossMax: this.bossMax,
       bossWarning: this.boss > 0 && this.bossFireIn <= 1,
       jam: Math.ceil(this.jam),
       supply: this.supply,
+      credits: this.credits,
+      growing: this.regrowth.length,
     };
   }
 }
